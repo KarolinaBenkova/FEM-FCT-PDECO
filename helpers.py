@@ -190,21 +190,51 @@ def L2_norm_sq_Omega(phi, M):
 def cost_functional_proj(u, w, c, d, s, uhatvec, num_steps, dt, M,
                          c_lower, c_upper, beta):
     '''
-    Evaluates the cost functional for given values of u, w, c and s
-    where u is shifted to u_n+1 and projected onto the set of admissible solutions.
+    Evaluates the cost functional for given values of:
+        u: state variable
+        w: increment in state variable
+        c: control variable
+        s: stepsize
+        d: direction vector
+        uhatvec: desired state
+    c is shifted to c_n+1 and projected onto the set of admissible solutions.
+    Assume linear equation so increment in u can be precalculated.
+    All-time optimization, i.e. desired state across the time interval (0,T].
     '''
     proj = np.clip(c + s*d,c_lower,c_upper)
     f = (L2_norm_sq_Q(u + s*w - uhatvec, num_steps, dt, M) \
          + beta*L2_norm_sq_Q(proj, num_steps, dt, M)) /2
     return f
+
+def cost_functional_proj_FT(m, f, c, d, s, mhatvec, fhatvec, num_steps, 
+                               dt, M, c_lower, c_upper, beta):
+    '''
+    Evaluates the cost functional for given values of 
+        m,f: state variables
+        c: control variable
+        s: stepsize
+        d: direction vector
+        mhatvec, fhatvec: desired states
+    c is shifted to c_n+1 and projected onto the set of admissible solutions.
+    Assume non-linear equation, thus m, f for new c are inputs.
+    Final-time optimization, i.e. desired states only at some final time T.
+    '''
+    proj = np.clip(c + s*d, c_lower, c_upper)
+    n = mhatvec.shape # number of nodes
+    f = (L2_norm_sq_Omega(m[num_steps * n :] - mhatvec, M)
+         + L2_norm_sq_Omega(f[num_steps * n :] - fhatvec, M)
+         + beta * L2_norm_sq_Q(proj, num_steps, dt, M)) /2
+    return f
     
 def armijo_line_search(u, p, w, c, d, uhatvec, num_steps, dt, M, c_lower, 
-                        c_upper, beta, gam = 10**-4, max_iter = 5, s0 = 1):
+                        c_upper, beta, gam = 10**-4, max_iter = 5, s0 = 1,
+                        optim = 'alltime'):
     '''
     Performs Projected Armijo Line Search and returns optimal step size.
     gam: parameter in tolerance for decrease in cost functional value
     max_iter: max number of armijo iterations
     s0: step size at the first iteration.
+    optim = {'alltime', 'finaltime'}
     '''
     
     k = 0 # counter
@@ -213,18 +243,36 @@ def armijo_line_search(u, p, w, c, d, uhatvec, num_steps, dt, M, c_lower,
     clip = np.clip(c + s * d, c_lower, c_upper)
     grad_costfun_L2 = L2_norm_sq_Q(np.clip(c + s * d, c_lower, c_upper) - c, 
                                   num_steps, dt, M)
+    n = uhatvec.shape
+    Z = np.zeros(u.shape)
+    z = np.zeros(n)
     print(f'{grad_costfun_L2=}')
-
-    costfun_init = (L2_norm_sq_Q(u - uhatvec, num_steps, dt, M)
-        + beta * L2_norm_sq_Q(c, num_steps, dt, M)) / 2
+    if optim == 'alltime':
+        # verify before deleting
+        # costfun_init = (L2_norm_sq_Q(u - uhatvec, num_steps, dt, M)
+        #                 + beta * L2_norm_sq_Q(c, num_steps, dt, M)) / 2
+        costfun_init = cost_functional_proj(u, Z, c, d, s, uhatvec, num_steps, 
+                                            dt, M, c_lower, c_upper, beta)
+    elif optim == 'finaltime':
+        costfun_init = cost_functional_proj_FT(u, Z, c, d, s, uhatvec, z, 
+                                   num_steps, dt, M, c_lower, c_upper, beta)
+    else:
+        raise ValueError(f"The selected option {optim} is invalid.")
+        
     armijo = 10**5 # initialise the difference in cost function norm decrease
     # note the negative sign in the condition comes from the descent direction
     while armijo > -gam / s * grad_costfun_L2 and k < max_iter:
         s = s0*( 1/2 ** k)
         # Calculate the incremented u using the new step size
         c_inc = np.clip(c - s * (beta * c - p), c_lower, c_upper)
-        cost2 = cost_functional_proj(u, w, c_inc, d, s, uhatvec, num_steps, 
+        
+        if optim == 'alltime':
+            cost2 = cost_functional_proj(u, w, c_inc, d, s, uhatvec, num_steps, 
                                       dt, M, c_lower, c_upper, beta)
+        elif optim == 'finaltime':
+            u_inc = u[num_steps * n :] + s*w[num_steps * n :]
+            cost2 = cost_functional_proj_FT(u_inc, Z, c_inc, d, s, uhatvec, z, 
+                                      num_steps, dt, M, c_lower, c_upper, beta)
         armijo = cost2 - costfun_init
         grad_costfun_L2 = L2_norm_sq_Q(c_inc - c, num_steps, dt, M)
 
@@ -235,45 +283,8 @@ def armijo_line_search(u, p, w, c, d, uhatvec, num_steps, dt, M, c_lower,
     print(f'Armijo exit at {k=} with {s=}')
     return s
 
-def cost_functional_proj_chtxs(m, f, c, d, s, mhatvec, fhatvec, num_steps, 
-                               dt, nodes, M, c_lower, c_upper, beta):
-    '''
-    Evaluates the cost functional for given values of m, f, c and s
-    where u is shifted to u_n+1 and projected onto the set of admissible solutions.
-    Assume non-linear equation, thus m, f for new c are inputs.
-    '''
-    proj = np.clip(c + s*d, c_lower, c_upper)
-    f = (L2_norm_sq_Omega(m[num_steps * nodes :] - mhatvec, M)
-         + L2_norm_sq_Omega(f[num_steps * nodes :] - fhatvec, M)
-         + beta * L2_norm_sq_Q(proj, num_steps, dt, M)) /2
-    return f
 
-def rhs_chtx_m(m_fun, v):
-    return np.asarray(assemble(4*m_fun * v * dx))
 
-def rhs_chtx_f(f_fun, m_fun, c_fun, dt, v):
-    return np.asarray(assemble(f_fun * v * dx  + dt * m_fun * c_fun * v * dx))
-
-def rhs_chtx_p(c_fun, q_fun, v):
-    return np.asarray(assemble(c_fun * q_fun * v * dx))
-
-def rhs_chtx_q(q_fun, m_fun, p_fun, chi, dt, v):
-    return np.asarray(assemble(q_fun * v * dx + 
-                        dt * div(chi * m_fun * grad(p_fun)) * v * dx))
-    
-def mat_chtx_m(f_fun, m_fun, Dm, chi, u, v):
-    Ad = assemble_sparse(assemble(dot(grad(u), grad(v)) * dx))
-    Aa = assemble_sparse(assemble(dot(grad(f_fun), grad(v)) * u * dx))
-    Ar = assemble_sparse(assemble(m_fun * u * v * dx))
-    return - Dm * Ad + chi * Aa + Ar
-
-def mat_chtx_p(f_fun, m_fun, Dm, chi, u, v):
-    Ad = assemble_sparse(assemble(dot(grad(u), grad(v)) * dx))
-    Aa = assemble_sparse(assemble(dot(grad(f_fun), grad(v)) * u * dx))
-    Adf = assemble_sparse(assemble(div(grad(f_fun)) * u * v * dx))
-    Ar = assemble_sparse(assemble((4 - 2 * m_fun) * u * v * dx))
-    return - Dm * Ad - chi * Aa - chi * Adf + Ar
-    
 def armijo_line_search_chtxs(m, f, q, c, d, mhatvec, fhatvec, Mat_fq, chi, Dm, Df, num_steps,
                              dt, nodes, M, M_Lump, Ad, c_lower, c_upper, beta, V, dof_neighbors, gam = 10**-4, 
                              max_iter = 5, s0 = 1):
@@ -295,8 +306,8 @@ def armijo_line_search_chtxs(m, f, q, c, d, mhatvec, fhatvec, Mat_fq, chi, Dm, D
     grad_costfun_L2 = L2_norm_sq_Q(np.clip(c + s * d, c_lower, c_upper) - c,
                                  num_steps, dt, M)
     print(f'{grad_costfun_L2=}')
-    costfun_init = cost_functional_proj_chtxs(m, f, c, d, s, mhatvec, fhatvec,
-                              num_steps, dt, nodes, M, c_lower, c_upper, beta)
+    costfun_init = cost_functional_proj_FT(m, f, c, d, s, mhatvec, fhatvec,
+                              num_steps, dt, M, c_lower, c_upper, beta)
     
     armijo = 10**5 # initialise the difference in cost function norm decrease
     # note the negative sign in the condition comes from the descent direction
@@ -337,8 +348,8 @@ def armijo_line_search_chtxs(m, f, q, c, d, mhatvec, fhatvec, Mat_fq, chi, Dm, D
         
         #######################################################################
         
-        cost2 = cost_functional_proj_chtxs(m, f, c_inc, d, s, mhatvec, \
-                           fhatvec, num_steps, dt, nodes, M, c_lower, c_upper, beta)
+        cost2 = cost_functional_proj_FT(m, f, c_inc, d, s, mhatvec, \
+                           fhatvec, num_steps, dt, M, c_lower, c_upper, beta)
         armijo = cost2 - costfun_init
         grad_costfun_L2 = L2_norm_sq_Q(c_inc - c, num_steps, dt, M)
 
@@ -346,6 +357,34 @@ def armijo_line_search_chtxs(m, f, q, c, d, mhatvec, fhatvec, Mat_fq, chi, Dm, D
         
     print(f'Armijo exit at {k=} with {s=}')
     return s
+
+def rhs_chtx_m(m_fun, v):
+    return np.asarray(assemble(4*m_fun * v * dx))
+
+def rhs_chtx_f(f_fun, m_fun, c_fun, dt, v):
+    return np.asarray(assemble(f_fun * v * dx  + dt * m_fun * c_fun * v * dx))
+
+def rhs_chtx_p(c_fun, q_fun, v):
+    return np.asarray(assemble(c_fun * q_fun * v * dx))
+
+def rhs_chtx_q(q_fun, m_fun, p_fun, chi, dt, v):
+    return np.asarray(assemble(q_fun * v * dx + 
+                        dt * div(chi * m_fun * grad(p_fun)) * v * dx))
+    
+def mat_chtx_m(f_fun, m_fun, Dm, chi, u, v):
+    Ad = assemble_sparse(assemble(dot(grad(u), grad(v)) * dx))
+    Aa = assemble_sparse(assemble(dot(grad(f_fun), grad(v)) * u * dx))
+    Ar = assemble_sparse(assemble(m_fun * u * v * dx))
+    return - Dm * Ad + chi * Aa + Ar
+
+def mat_chtx_p(f_fun, m_fun, Dm, chi, u, v):
+    Ad = assemble_sparse(assemble(dot(grad(u), grad(v)) * dx))
+    Aa = assemble_sparse(assemble(dot(grad(f_fun), grad(v)) * u * dx))
+    Adf = assemble_sparse(assemble(div(grad(f_fun)) * u * v * dx))
+    Ar = assemble_sparse(assemble((4 - 2 * m_fun) * u * v * dx))
+    return - Dm * Ad - chi * Aa - chi * Adf + Ar
+    
+
 
 def FCT_alg(A, d, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat = None):
 

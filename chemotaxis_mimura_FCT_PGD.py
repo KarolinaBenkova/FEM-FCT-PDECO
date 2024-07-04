@@ -8,6 +8,7 @@ from datetime import timedelta
 from scipy.integrate import simps
 from helpers import *
 import mimura_data_helpers
+import data_helpers
 
 # ---------------------------------------------------------------------------
 ### PDE-constrained optimisation problem for the chemotaxis system
@@ -54,6 +55,7 @@ dt = 0.1
 T = 14
 num_steps = round((T-t0)/dt)
 tol = 10**-5 # !!!
+example_name = 'mimura_tsujikawa'
 
 # Initialize a square mesh
 mesh = RectangleMesh(Point(a1, a1), Point(a2, a2), intervals_line, intervals_line)
@@ -97,8 +99,8 @@ f0_orig = 1/32 * np.ones(nodes)
 m0 = reorder_vector_to_dof_time(m0_orig, 1, nodes, vertextodof)
 f0 = reorder_vector_to_dof_time(f0_orig, 1, nodes, vertextodof)
 
-mhat_T_orig = mimura_data_helpers.get_data_array('m', T)
-fhat_T_orig = mimura_data_helpers.get_data_array('f', T)
+mhat_T_orig = data_helpers.get_data_array('m', example_name, T)
+fhat_T_orig = data_helpers.get_data_array('f', example_name, T)
 mhat_T = reorder_vector_to_dof_time(mhat_T_orig, 1, nodes, vertextodof)
 fhat_T = reorder_vector_to_dof_time(fhat_T_orig, 1, nodes, vertextodof)
 

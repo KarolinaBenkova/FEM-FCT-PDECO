@@ -8,10 +8,7 @@ from scipy.integrate import simps
 from helpers import *
 
 # ---------------------------------------------------------------------------
-### PDE-constrained optimisation problem for the advection-diffusion equation
-### with Flux-corrected transport method
-# min_{u,v,a,b} 1/2*||u-\hat{u}||^2 + beta/2*||c||^2  (norms in L^2)
-# subject to:
+### Flux-corrected transport method for the advection(-diffusion) equation
 #  du/dt - eps*grad^2(u) + w \dot grad(u)) = c + g       in Ωx[0,T]
 #                           dot(grad u, n) = 0           on ∂Ωx[0,T]
 #                                    du/dn = 0           on ∂Ωx[0,T]
@@ -20,15 +17,8 @@ from helpers import *
 # w = velocity/wind vector with the following properties:
 #                                 div (w) = 0           in Ωx[0,T]
 #                                w \dot n = 0           on ∂Ωx[0,T]
-
-# Optimality conditions:
-#  du/dt - eps*grad^2(u) + w \dot grad(u)) = c + g                 in Ωx[0,T]
-#    -dp/dt - eps*grad^2 p - w \dot grad(p)= \hat{u} - u           in Ωx[0,T]
-#                            dp/dn = du/dn = 0                     on ∂Ωx[0,T]
-#                                     u(0) = u0(x)                 in Ω
-#                                     p(T) = 0                     in Ω
-# gradient equation:                     c = 1 \ beta * p
-#                                        c = proj_[ca,cb] (1/beta*p) in Ωx[0,T]
+# w = omega*(-y, x) + 2*(1,1) for rotation and drift with constant velocity 2
+# used to generate target state for advection solid body PDECO, c=2
 # ---------------------------------------------------------------------------
 
 ## Define the parameters
@@ -36,10 +26,7 @@ a1 = -1
 a2 = 1
 deltax = 0.1/2/2
 intervals_line = round((a2-a1)/deltax)
-beta = 1
 # box constraints for c, exact solution is in [0,1]
-c_upper = 0.5
-c_lower = 0
 e1 = 0.2
 e2 = 0.3
 k1 = 1
@@ -47,11 +34,12 @@ k2 = 1
 
 # diffusion coefficient
 eps = 0 #0.001
-om = np.pi/40
+om = np.pi/40 
+# if om = np.pi/10 & dt=0.1, at T=2 the body rotates into starting position
 
 t0 = 0
 dt = deltax**2 #0.01
-T = 0.5 #2
+T = 1 #0.5 #2
 num_steps = round((T-t0)/dt)
 tol = 10**-4 # !!!
 
@@ -70,7 +58,7 @@ X, Y = np.meshgrid(X,Y)
 
 show_plots = True
 
-def uex(X,Y):
+def u_init(X,Y):
     '''
     Function for the true solution.
     Input = mesh grid (X,Y = square 2D arrays with the same dimensions), time
@@ -125,25 +113,17 @@ M_diag = M.diagonal()
 M_Lump_diag = M_Lump.diagonal()
 
 ###############################################################################
-########################### Initial guesses for GD ############################
+############################## Initial condition ##############################
 ###############################################################################
 
-vec_length = (num_steps + 1)*nodes # include zero and final time
-
-zeros_nt = np.zeros(vec_length)
-uk = np.zeros(vec_length)
-u0_orig = uex(X, Y).reshape(nodes)
-
+u0_orig = u_init(X, Y).reshape(nodes)
 u0 = reorder_vector_to_dof_time(u0_orig, 1, nodes, vertextodof)
 
+vec_length = (num_steps + 1)*nodes # include zero and final time
+uk = np.zeros(vec_length)
 uk[:nodes] = u0
 
-###############################################################################
-###################### PROJECTED GRADIENT DESCENT #############################
-###############################################################################
-
-print(f'dx={deltax}, {dt=}, {T=}, {beta=}')
-print('Solving state equation...')
+print(f'dx={deltax}, {dt=}, {T=}')
 t=0
 for i in range(1, num_steps + 1):    # solve for uk(t_{n+1})
     start = i * nodes
@@ -177,8 +157,8 @@ for i in range(1, num_steps + 1):    # solve for uk(t_{n+1})
 # Mapping to order the solution vectors based on vertex indices
 uk_re = reorder_vector_from_dof_time(uk, num_steps + 1, nodes, vertextodof)
 
-min_u = min(np.amin(uk), np.amin(uex(X, Y)))
-max_u = max(np.amax(uk), np.amax(uex(X,Y)))
+min_u = min(np.amin(uk), np.amin(u_init(X, Y)))
+max_u = max(np.amax(uk), np.amax(u_init(X,Y)))
 
 for i in range(num_steps):
     startU = (i+1) * nodes
@@ -200,7 +180,7 @@ for i in range(num_steps):
     #     plt.title(f'Computed state $u$ at t = {round(tU,5)}')
     #     plt.show()
         
-        # filename = f'solid_body_rotation_loworder/plot_{i:03}.png'  # e.g., plot_001.png, plot_002.png, etc.
+        # filename = f'solid_body_rotation/plot_{i:03}.png'  # e.g., plot_001.png, plot_002.png, etc.
         # plt.savefig(filename)
         # plt.close()
         
@@ -212,7 +192,7 @@ E_u = np.linalg.norm(u0 - u_re_T)
 RE_u = E_u / np.linalg.norm(u0)
 WE_u = deltax * E_u
 
-print(f'{dt=}, {deltax=}, {T=}, {beta=}, {om=}')
+print(f'{dt=}, {deltax=}, {T=}, {om=}')
 print('Relative errors')
 print('u:', RE_u)
 print('Weighted errors')
