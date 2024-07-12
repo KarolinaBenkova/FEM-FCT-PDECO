@@ -202,9 +202,9 @@ def cost_functional_proj(u, w, c, d, s, uhatvec, num_steps, dt, M,
     All-time optimization, i.e. desired state across the time interval (0,T].
     '''
     proj = np.clip(c + s*d,c_lower,c_upper)
-    f = (L2_norm_sq_Q(u + s*w - uhatvec, num_steps, dt, M) \
+    func = (L2_norm_sq_Q(u + s*w - uhatvec, num_steps, dt, M) \
          + beta*L2_norm_sq_Q(proj, num_steps, dt, M)) /2
-    return f
+    return func
 
 def cost_functional_proj_FT(m, f, c, d, s, mhatvec, fhatvec, num_steps, 
                                dt, M, c_lower, c_upper, beta):
@@ -220,11 +220,11 @@ def cost_functional_proj_FT(m, f, c, d, s, mhatvec, fhatvec, num_steps,
     Final-time optimization, i.e. desired states only at some final time T.
     '''
     proj = np.clip(c + s*d, c_lower, c_upper)
-    n = mhatvec.shape # number of nodes
-    f = (L2_norm_sq_Omega(m[num_steps * n :] - mhatvec, M)
+    n = mhatvec.shape[0] # number of nodes
+    func = (L2_norm_sq_Omega(m[num_steps * n :] - mhatvec, M)
          + L2_norm_sq_Omega(f[num_steps * n :] - fhatvec, M)
          + beta * L2_norm_sq_Q(proj, num_steps, dt, M)) /2
-    return f
+    return func
     
 def armijo_line_search(u, p, w, c, d, uhatvec, num_steps, dt, M, c_lower, 
                         c_upper, beta, gam = 10**-4, max_iter = 5, s0 = 1,
@@ -243,7 +243,7 @@ def armijo_line_search(u, p, w, c, d, uhatvec, num_steps, dt, M, c_lower,
     clip = np.clip(c + s * d, c_lower, c_upper)
     grad_costfun_L2 = L2_norm_sq_Q(np.clip(c + s * d, c_lower, c_upper) - c, 
                                   num_steps, dt, M)
-    n = uhatvec.shape
+    n = uhatvec.shape[0]
     Z = np.zeros(u.shape)
     z = np.zeros(n)
     print(f'{grad_costfun_L2=}')
@@ -262,6 +262,8 @@ def armijo_line_search(u, p, w, c, d, uhatvec, num_steps, dt, M, c_lower,
     armijo = 10**5 # initialise the difference in cost function norm decrease
     # note the negative sign in the condition comes from the descent direction
     while armijo > -gam / s * grad_costfun_L2 and k < max_iter:
+        print(f'{k=}')
+
         s = s0*( 1/2 ** k)
         # Calculate the incremented u using the new step size
         c_inc = np.clip(c - s * (beta * c - p), c_lower, c_upper)
@@ -270,18 +272,20 @@ def armijo_line_search(u, p, w, c, d, uhatvec, num_steps, dt, M, c_lower,
             cost2 = cost_functional_proj(u, w, c_inc, d, s, uhatvec, num_steps, 
                                       dt, M, c_lower, c_upper, beta)
         elif optim == 'finaltime':
-            u_inc = u[num_steps * n :] + s*w[num_steps * n :]
+            u_inc = u + s*w
             cost2 = cost_functional_proj_FT(u_inc, Z, c_inc, d, s, uhatvec, z, 
                                       num_steps, dt, M, c_lower, c_upper, beta)
         armijo = cost2 - costfun_init
         grad_costfun_L2 = L2_norm_sq_Q(c_inc - c, num_steps, dt, M)
 
-        # print(f'{k=},{armijo=}')
 
         k += 1
         
     print(f'Armijo exit at {k=} with {s=}')
-    return s
+    if optim == 'alltime':
+        return s
+    elif optim == 'finaltime':
+        return s, u_inc
 
 
 
@@ -403,7 +407,7 @@ def FCT_alg(A, d, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat = None):
     
     ## 2. Calculate raw antidiffusive flux
     # approximate the derivative du/dt using Chebyshev semi-iterative method
-    rhs_du_dt = A @ u_Low + d
+    rhs_du_dt = np.squeeze(np.asarray(A @ u_Low + d)) # flatten to vector array
     du_dt = ChebSI(rhs_du_dt, M, M_diag, 20, 0.5, 2)
     
     # corrected flux calculation(only use neighbouring nodes):

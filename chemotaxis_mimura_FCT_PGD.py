@@ -54,7 +54,7 @@ t0 = 0
 dt = 0.1
 T = 14
 num_steps = round((T-t0)/dt)
-tol = 10**-5 # !!!
+tol = 10**-2 # !!!
 example_name = 'mimura_tsujikawa'
 
 # Initialize a square mesh
@@ -99,10 +99,15 @@ f0_orig = 1/32 * np.ones(nodes)
 m0 = reorder_vector_to_dof_time(m0_orig, 1, nodes, vertextodof)
 f0 = reorder_vector_to_dof_time(f0_orig, 1, nodes, vertextodof)
 
-mhat_T_orig = data_helpers.get_data_array('m', example_name, T)
-fhat_T_orig = data_helpers.get_data_array('f', example_name, T)
-mhat_T = reorder_vector_to_dof_time(mhat_T_orig, 1, nodes, vertextodof)
-fhat_T = reorder_vector_to_dof_time(fhat_T_orig, 1, nodes, vertextodof)
+plt.imshow(m0_orig.reshape((sqnodes,sqnodes)))
+plt.colorbar()
+plt.show()
+
+# imported in dof ordering
+mhat_T = data_helpers.get_data_array('m', example_name, T)
+fhat_T = data_helpers.get_data_array('f', example_name, T)
+# mhat_T = reorder_vector_to_dof_time(mhat_T_orig, 1, nodes, vertextodof)
+# fhat_T = reorder_vector_to_dof_time(fhat_T_orig, 1, nodes, vertextodof)
 
 ###############################################################################
 ########################### Initial guesses for GD ############################
@@ -129,8 +134,8 @@ sk = 0
 ###############################################################################
 
 it = 0
-cost_fun_k = 10*cost_functional_proj_chtxs(mk, fk, ck, 
-   dk, sk, mhat_T, fhat_T, num_steps, dt, nodes, M, c_lower, c_upper, beta)
+cost_fun_k = 10*cost_functional_proj_FT(mk, fk, ck, 
+   dk, sk, mhat_T, fhat_T, num_steps, dt, M, c_lower, c_upper, beta)
 
 stop_crit = 5
 stop_crit2 = 5 
@@ -171,10 +176,12 @@ while (stop_crit2 >= tol) and it<1000:
         fk[start : end] = spsolve(Mat_fq, f_rhs)
         
         f_np1_fun = vec_to_function(fk[start : end], V)
-
+        
+        # run using  Ar = np.zeros(Ad.shape) and reaction term on the RHS
         A_m = mimura_data_helpers.mat_chtx_m(f_np1_fun, m_n_fun, Dm, chi, u, v)
-        m_rhs = np.zeros(nodes)
-
+        # m_rhs = np.zeros(nodes)
+        m_rhs = mimura_data_helpers.rhs_chtx_m(m_n_fun, v)
+        
         mk[start : end] =  FCT_alg(A_m, m_rhs, m_n, dt, nodes, M, M_Lump, dof_neighbors)
 
     
@@ -241,8 +248,8 @@ while (stop_crit2 >= tol) and it<1000:
         / L2_norm_sq_Q(ck, num_steps, dt, M)
 
     # Check the cost functional - stopping criterion
-    cost_fun_kp1 = cost_functional_proj_chtxs(mk, fk, ckp1, dk, sk, 
-              mhat_T, fhat_T, num_steps, dt, nodes, M, c_lower, c_upper, beta)
+    cost_fun_kp1 = cost_functional_proj_FT(mk, fk, ckp1, dk, sk, 
+              mhat_T, fhat_T, num_steps, dt, M, c_lower, c_upper, beta)
     stop_crit2 = np.abs(cost_fun_k - cost_fun_kp1) / np.abs(cost_fun_k)
 
     cost_fun_k = cost_fun_kp1
@@ -294,27 +301,28 @@ for i in range(num_steps):
     p_re = p_re.reshape((sqnodes, sqnodes))
     q_re = q_re.reshape((sqnodes, sqnodes))
     
-    if show_plots is True and i % 20 == 0:
+    
+    if show_plots is True and i % 1 == 0:
         fig2 = plt.figure(figsize = (15, 10))
         fig2.tight_layout(pad = 3.0)
         ax2 = plt.subplot(2,3,1)
-        im1 = plt.imshow(m_re, vmin = min_m, vmax = max_m)
+        im1 = plt.imshow(m_re, cmap='gray_r')#, vmin = min_m, vmax = max_m)
         fig2.colorbar(im1)
         plt.title(f'Computed state $m$ at t = {round(t_st,5)}')
         ax2 = plt.subplot(2,3,2)
-        im2 = plt.imshow(f_re, vmin = min_f, vmax = max_f)
+        im2 = plt.imshow(f_re, cmap='gray_r')#, vmin = min_f, vmax = max_f)
         fig2.colorbar(im2)
         plt.title(f'Computed state $f$ at t = {round(t_st,5)}')
         ax2 = plt.subplot(2,3,3)
-        im1 = plt.imshow(c_re, vmin = min_c, vmax = max_c)
+        im1 = plt.imshow(c_re, cmap='gray_r')#, vmin = min_c, vmax = max_c)
         fig2.colorbar(im1)
         plt.title(f'Computed control $c$ at t = {round(t_adj,5)}')
         ax2 = plt.subplot(2,3,4)
-        im2 = plt.imshow(p_re, vmin = min_p, vmax = max_p)
+        im2 = plt.imshow(p_re, cmap='gray_r')#, vmin = min_p, vmax = max_p)
         fig2.colorbar(im2)
         plt.title(f'Computed adjoint $p$ at t = {round(t_adj,5)}')
         ax2 = plt.subplot(2,3,5)
-        im1 = plt.imshow(q_re, vmin = min_q, vmax = max_q)
+        im1 = plt.imshow(q_re, cmap='gray_r')#, vmin = min_q, vmax = max_q)
         fig2.colorbar(im1)
         plt.title(f'Computed adjoint $q$ at t = {round(t_adj,5)}')
         plt.show()

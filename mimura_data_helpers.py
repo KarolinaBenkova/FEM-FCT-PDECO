@@ -21,26 +21,32 @@ def m_initial_condition(a1, a2, deltax):
     Y = np.arange(a1, a2 + deltax, deltax)
     X, Y = np.meshgrid(X,Y)
     
-    # Initialize the condition array with zeros
-    m0_array = np.ones(X.shape)
+    # # Initialize the condition array with zeros
+    # m0_array = np.ones(X.shape)
     
-    # Add the perturbation
-    radius_squared = 1.5 ** 2
-    center_x, center_y = 8, 8
-    condition = (X - center_x)**2 + (Y - center_y)**2 <= radius_squared
-    # generate array of random numbers between (-0.5, 0.5)
-    random_values = 0.05*np.random.rand(*X.shape)# - 0.5
+    # # Add the perturbation
+    # radius_squared = 1.5 ** 2
+    # center_x, center_y = 8, 8
+    # condition = (X - center_x)**2 + (Y - center_y)**2 <= radius_squared
+    # # generate array of random numbers between (-0.5, 0.5)
+    # random_values = 0.05*np.random.rand(*X.shape)# - 0.5
     
-    m0_array[condition] += random_values[condition]
+    # m0_array[condition] += random_values[condition]
     
     # same number everywhere:
     # m0_array[condition] += (np.random.rand()-0.5)
+    
+    m0_array = np.exp(-5*((X-8)**2 + (Y-8)**2))
     
     return m0_array
 
 def rhs_chtx_m(m_fun, v):
     # modified for the reaction term: m^2(1-m)
-    return np.asarray(assemble(m_fun **2 * v * dx))
+    # return np.asarray(assemble(m_fun **2 * v * dx))
+    
+    # using IMEX so that the reaction term is on the RHS
+    return np.asarray(assemble(m_fun **2 * (1 - m_fun)* v * dx))
+
 
 def rhs_chtx_f(f_fun, m_fun, dt, v):
     # modified to have c = 1 (multiplying m)
@@ -52,7 +58,9 @@ def mat_chtx_m(f_fun, m_fun, Dm, chi, u, v):
     Aa = assemble_sparse(assemble(dot(grad(f_fun), grad(v)) * u * dx))
     # Ar = assemble_sparse(assemble(m_fun **2 * u * v * dx))
     ## using the same reaction term matrix as in FEniCS sim.:
-    Ar = assemble_sparse(assemble(m_fun * (1 - m_fun) * u * v * dx))
+    # Ar = assemble_sparse(assemble(m_fun * (1 - m_fun) * u * v * dx))
+    # used the above but the scale of the images wasn't right.
+    Ar = np.zeros(Ad.shape)
 
     return - Dm * Ad + chi * Aa + Ar
 
