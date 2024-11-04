@@ -19,30 +19,25 @@ import mimura_data_helpers
 #                            given initial conditions for m,f     in Ω
 
 # Dm, Df, chi are parameters
-# linearise equation for m
-    
-# Optimality conditions:
-#        dm/dt - Dm*grad^2(m) + div(chi*m*grad(f)) = m(4-m)       in Ωx[0,T]
-#                  df/dt - Df*grad^2(f)) + delta*f = c*m          in Ωx[0,T]
-#    -dp/dt - Dm*grad^2 p - chi*grad(p)*grad(f)) \
-#                                 - chi*(4-2mk)*p - cq = 0         in Ωx[0,T]
-#    -dq/dt - Df*grad^2(q)) + div(chi*m*grad(p)) + delta*q = 0     in Ωx[0,T]
-#            dm/dn = df/dn = dp/dn = dq/dn = 0                     on ∂Ωx[0,T]
-#                                     u(0) = u0(x)                 in Ω
-#                                     p(T) = 0                     in Ω
-# gradient equation:           c = proj_[ca,cb] (1 / beta*q * m)   in Ωx[0,T]
 # ---------------------------------------------------------------------------
 
 ## Define the parameters
 a1 = 0
-a2 = 16
-deltax = 1/8/2
+a2 = 10 #16
+deltax = 0.2 #1/8
 intervals_line = round((a2 - a1) / deltax)
 
-delta = 32
-Dm = 0.0625
-Df = 1
-chi = 8.5
+## mimura
+# delta = 32
+# Dm = 0.0625
+# Df = 1
+# chi = 8.5
+
+## painter ptashnyk headon 2021 
+delta = 2
+Dm = 0.05
+Df = 0.05
+chi = 0.125
 
 t0 = 0
 dt = 0.01
@@ -71,13 +66,13 @@ dof_neighbors = find_node_neighbours(mesh, nodes, vertextodof)
 ###############################################################################
 
 # Mass matrix
-M = assemble_sparse_lil(assemble(u * v * dx))
+M = assemble_sparse_lil(u * v * dx)
 
 # Row-lumped mass matrix
 M_Lump = row_lump(M, nodes)
 
 # Stiffness matrix
-Ad = assemble_sparse(assemble(dot(grad(u), grad(v)) * dx))
+Ad = assemble_sparse(dot(grad(u), grad(v)) * dx)
 
 # System matrix: equation for f
 Mat_f = M + dt * (Df * Ad + delta * M)
@@ -88,7 +83,7 @@ zeros = np.zeros(nodes)
 ###############################################################################
 
 m0_orig = mimura_data_helpers.m_initial_condition(a1, a2, deltax).reshape(nodes)
-f0_orig = 1/32 * np.ones(nodes)
+f0_orig = m0_orig / delta #m0_orig #1/32 * np.ones(nodes)
 m0 = reorder_vector_to_dof_time(m0_orig, 1, nodes, vertextodof)
 f0 = reorder_vector_to_dof_time(f0_orig, 1, nodes, vertextodof)
 

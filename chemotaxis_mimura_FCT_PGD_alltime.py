@@ -7,6 +7,8 @@ from timeit import default_timer as timer
 from datetime import timedelta
 from scipy.integrate import simps
 from helpers import *
+import mimura_data_helpers
+import data_helpers
 
 # ---------------------------------------------------------------------------
 ### PDE-constrained optimisation problem for the chemotaxis system
@@ -35,24 +37,26 @@ from helpers import *
 
 ## Define the parameters
 a1 = 0
-a2 = 1
-deltax = 0.1
+a2 = 16
+deltax = 1/8
 intervals_line = round((a2 - a1) / deltax)
 beta = 1
 # box constraints for c, exact solution is in [0,1]
-c_upper = 0.5
+c_upper = 1.5
 c_lower = 0
 
-delta = 1
-Dm = 0.001
-Df = 0.001
-chi = 1
+delta = 32
+Dm = 0.0625
+Df = 1
+chi = 8.5
 
 t0 = 0
-dt = deltax**2 #0.01
-T = 0.2
+dt = 0.1
+T = 3*dt #2
+T_sim = 14
 num_steps = round((T-t0)/dt)
-tol = 10**-4 # !!!
+tol = 10**-2 # !!!
+example_name = 'mimura'
 
 # Initialize a square mesh
 mesh = RectangleMesh(Point(a1, a1), Point(a2, a2), intervals_line, intervals_line)
@@ -87,26 +91,35 @@ Ad = assemble_sparse(dot(grad(u), grad(v)) * dx)
 # System matrix: equation for f and q
 Mat_fq = M + dt * (Df * Ad + delta * M)
 
-zeros = np.zeros(nodes)
 ###############################################################################
 ################ Target states & initial conditions for m,f ###################
 ###############################################################################
 
-m0_orig = zeros
-f0_orig = zeros
+m0_orig = mimura_data_helpers.m_initial_condition(a1, a2, deltax).reshape(nodes)
+f0_orig = 1/32 * np.ones(nodes)
 m0 = reorder_vector_to_dof_time(m0_orig, 1, nodes, vertextodof)
 f0 = reorder_vector_to_dof_time(f0_orig, 1, nodes, vertextodof)
 
-mhat_T_orig = zeros
-fhat_T_orig = zeros
-mhat_T = reorder_vector_to_dof_time(mhat_T_orig, 1, nodes, vertextodof)
-fhat_T = reorder_vector_to_dof_time(fhat_T_orig, 1, nodes, vertextodof)
+plt.imshow(m0_orig.reshape((sqnodes,sqnodes)))
+plt.colorbar()
+plt.show()
+
+vec_length = (num_steps + 1) * nodes # include zero and final time
+mhat_all = np.zeros(vec_length)
+fhat_all = np.zeros(vec_length)
+
+# imported in dof ordering
+mhat_all = np.genfromtxt(example_name + '_m.csv', delimiter=',')[:vec_length]
+fhat_all = np.genfromtxt(example_name + '_f.csv', delimiter=',')[:vec_length]
+mhat_all[:nodes] = m0
+fhat_all[:nodes] = f0
+mhat_all_re = reorder_vector_from_dof_time(mhat_all, num_steps + 1, nodes, vertextodof)
+fhat_all_re = reorder_vector_from_dof_time(fhat_all, num_steps + 1, nodes, vertextodof)
 
 ###############################################################################
 ########################### Initial guesses for GD ############################
 ###############################################################################
 
-vec_length = (num_steps + 1) * nodes # include zero and final time
 zeros_nt = np.zeros(vec_length)
 
 ck = np.zeros(vec_length)
@@ -127,14 +140,19 @@ sk = 0
 ###############################################################################
 
 it = 0
-cost_fun_k = 10*cost_functional_proj_chtxs(mk, fk, ck, 
-   dk, sk, mhat_T, fhat_T, num_steps, dt, nodes, M, c_lower, c_upper, beta)
+# cost_fun_k = 10*cost_functional_proj_FT(mk, fk, ck, 
+   # dk, sk, mhat_all, fhat_all, num_steps, dt, M, c_lower, c_upper, beta)
+
+cost_fun_k = 10*cost_functional(mk, mhat_all, ck, num_steps, dt, M, beta, 
+                            optim='alltime', var2 = fk, var2_target = fhat_all)
 
 stop_crit = 5
 stop_crit2 = 5 
 print(f'dx={deltax}, {dt=}, {T=}, {beta=}')
 print('Starting projected gradient descent method...')
-while ((stop_crit >= tol ) or (stop_crit2 >= tol)) and it<1000:
+# while ((stop_crit >= tol ) or (stop_crit2 >= tol)) and it<1000:
+while (stop_crit2 >= tol) and it<1000:
+
     it += 1
     print(f'\n{it=}')
         
@@ -167,9 +185,10 @@ while ((stop_crit >= tol ) or (stop_crit2 >= tol)) and it<1000:
         fk[start : end] = spsolve(Mat_fq, f_rhs)
         
         f_np1_fun = vec_to_function(fk[start : end], V)
-
-        A_m = mat_chtx_m(f_np1_fun, m_n_fun, Dm, chi, u, v)
-        m_rhs = rhs_chtx_m(m_n_fun, v)
+        
+        # run using  Ar = np.zeros(Ad.shape) and reaction term on the RHS
+        A_m = mimura_data_helpers.mat_chtx_m(f_np1_fun, m_n_fun, Dm, chi, u, v)
+        m_rhs = mimura_data_helpers.rhs_chtx_m(m_n_fun, v) # reaction term m^2(1-m)
         
         mk[start : end] =  FCT_alg(A_m, m_rhs, m_n, dt, nodes, M, M_Lump, dof_neighbors)
 
@@ -181,8 +200,8 @@ while ((stop_crit >= tol ) or (stop_crit2 >= tol)) and it<1000:
     qk = np.zeros(vec_length) 
     pk = np.zeros(vec_length)
     # insert final-time condition
-    qk[num_steps * nodes :] = fhat_T - fk[num_steps * nodes :]
-    pk[num_steps * nodes :] = mhat_T - mk[num_steps * nodes :]
+    qk[num_steps * nodes :] = fhat_all - fk[num_steps * nodes :]
+    pk[num_steps * nodes :] = mhat_all - mk[num_steps * nodes :]
     t = T
     print('Solving adjoint equations...')
     for i in reversed(range(0, num_steps)):
@@ -207,7 +226,7 @@ while ((stop_crit >= tol ) or (stop_crit2 >= tol)) and it<1000:
         
         q_n_fun = vec_to_function(qk[start : end], V)      # qk(t_n)
 
-        A_p = mat_chtx_p(f_n_fun, m_n_fun, Dm, chi, u, v)
+        A_p = mimura_data_helpers.mat_chtx_p(f_n_fun, m_n_fun, Dm, chi, u, v)
         p_rhs = rhs_chtx_p(c_n_fun, q_n_fun, v)
         
         pk[start:end] = FCT_alg(A_p, p_rhs, p_np1, dt, nodes, M, M_Lump, dof_neighbors)
@@ -223,7 +242,7 @@ while ((stop_crit >= tol ) or (stop_crit2 >= tol)) and it<1000:
     ###########################################################################
     
     print('Starting Armijo line search...')
-    sk = armijo_line_search_chtxs(mk, fk, qk, ck, dk, mhat_T, fhat_T, Mat_fq, 
+    sk = armijo_line_search_chtxs(mk, fk, qk, ck, dk, mhat_all, fhat_all, Mat_fq, 
                                   chi, Dm, Df, num_steps, dt, nodes, M, M_Lump, 
                                   Ad, c_lower, c_upper, beta, V, dof_neighbors)
     
@@ -237,12 +256,66 @@ while ((stop_crit >= tol ) or (stop_crit2 >= tol)) and it<1000:
         / L2_norm_sq_Q(ck, num_steps, dt, M)
 
     # Check the cost functional - stopping criterion
-    cost_fun_kp1 = cost_functional_proj_chtxs(mk, fk, ckp1, dk, sk, 
-              mhat_T, fhat_T, num_steps, dt, nodes, M, c_lower, c_upper, beta)
+    # cost_fun_kp1 = cost_functional_proj_FT(mk, fk, ckp1, dk, sk, 
+    #           mhat_all, fhat_all, num_steps, dt, M, c_lower, c_upper, beta)
+    
+    cost_fun_kp1 = cost_functional(mk, mhat_all, ckp1, num_steps, dt, M, beta, 
+                                optim='alltime', var2 = fk, var2_target = fhat_all)
+    
+    stop_crit2 = np.abs(cost_fun_k - cost_fun_kp1) / np.abs(cost_fun_k)
+
     cost_fun_k = cost_fun_kp1
     ck = ckp1
     print(f'{stop_crit=}')
     print(f'{stop_crit2=}')
+    
+    for i in range(num_steps):
+        start_adj = i * nodes
+        end_adj = (i+1) * nodes
+        t_adj = i * dt
+        
+        start_st = (i+1) * nodes
+        end_st = (i+2) * nodes
+        t_st = (i+1) * dt
+        
+        m_re = mk_re[start_st : end_st]
+        f_re = fk_re[start_st : end_st]
+        c_re = ck_re[start_adj : end_adj]
+        p_re = pk_re[start_adj : end_adj]
+        q_re = qk_re[start_adj : end_adj]
+
+        m_re = m_re.reshape((sqnodes, sqnodes))
+        f_re = f_re.reshape((sqnodes, sqnodes))
+        c_re = c_re.reshape((sqnodes, sqnodes))
+        p_re = p_re.reshape((sqnodes, sqnodes))
+        q_re = q_re.reshape((sqnodes, sqnodes))
+        
+        
+        if show_plots is True:
+            fig2 = plt.figure(figsize = (15, 10))
+            fig2.tight_layout(pad = 3.0)
+            ax2 = plt.subplot(2,3,1)
+            im1 = plt.imshow(m_re, cmap='gray_r')#, vmin = min_m, vmax = max_m)
+            fig2.colorbar(im1)
+            plt.title(f'Computed state $m$ at t = {round(t_st,5)}')
+            ax2 = plt.subplot(2,3,2)
+            im2 = plt.imshow(f_re, cmap='gray_r')#, vmin = min_f, vmax = max_f)
+            fig2.colorbar(im2)
+            plt.title(f'Computed state $f$ at t = {round(t_st,5)}')
+            ax2 = plt.subplot(2,3,3)
+            im1 = plt.imshow(c_re, cmap='gray_r')#, vmin = min_c, vmax = max_c)
+            fig2.colorbar(im1)
+            plt.title(f'Computed control $c$ at t = {round(t_adj,5)}')
+            ax2 = plt.subplot(2,3,4)
+            im2 = plt.imshow(p_re, cmap='gray_r')#, vmin = min_p, vmax = max_p)
+            fig2.colorbar(im2)
+            plt.title(f'Computed adjoint $p$ at t = {round(t_adj,5)}')
+            ax2 = plt.subplot(2,3,5)
+            im1 = plt.imshow(q_re, cmap='gray_r')#, vmin = min_q, vmax = max_q)
+            fig2.colorbar(im1)
+            plt.title(f'Computed adjoint $q$ at t = {round(t_adj,5)}')
+            plt.show()
+    
     
 ###############################################################################    
 # Mapping to order the solution vectors based on vertex indices
@@ -288,27 +361,28 @@ for i in range(num_steps):
     p_re = p_re.reshape((sqnodes, sqnodes))
     q_re = q_re.reshape((sqnodes, sqnodes))
     
-    if show_plots is True and i % 20 == 0:
+    
+    if show_plots is True and i % 1 == 0:
         fig2 = plt.figure(figsize = (15, 10))
         fig2.tight_layout(pad = 3.0)
         ax2 = plt.subplot(2,3,1)
-        im1 = plt.imshow(m_re, vmin = min_m, vmax = max_m)
+        im1 = plt.imshow(m_re, cmap='gray_r')#, vmin = min_m, vmax = max_m)
         fig2.colorbar(im1)
         plt.title(f'Computed state $m$ at t = {round(t_st,5)}')
         ax2 = plt.subplot(2,3,2)
-        im2 = plt.imshow(f_re, vmin = min_f, vmax = max_f)
+        im2 = plt.imshow(f_re, cmap='gray_r')#, vmin = min_f, vmax = max_f)
         fig2.colorbar(im2)
         plt.title(f'Computed state $f$ at t = {round(t_st,5)}')
         ax2 = plt.subplot(2,3,3)
-        im1 = plt.imshow(c_re, vmin = min_c, vmax = max_c)
+        im1 = plt.imshow(c_re, cmap='gray_r')#, vmin = min_c, vmax = max_c)
         fig2.colorbar(im1)
         plt.title(f'Computed control $c$ at t = {round(t_adj,5)}')
         ax2 = plt.subplot(2,3,4)
-        im2 = plt.imshow(p_re, vmin = min_p, vmax = max_p)
+        im2 = plt.imshow(p_re, cmap='gray_r')#, vmin = min_p, vmax = max_p)
         fig2.colorbar(im2)
         plt.title(f'Computed adjoint $p$ at t = {round(t_adj,5)}')
         ax2 = plt.subplot(2,3,5)
-        im1 = plt.imshow(q_re, vmin = min_q, vmax = max_q)
+        im1 = plt.imshow(q_re, cmap='gray_r')#, vmin = min_q, vmax = max_q)
         fig2.colorbar(im1)
         plt.title(f'Computed adjoint $q$ at t = {round(t_adj,5)}')
         plt.show()

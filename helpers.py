@@ -3,7 +3,6 @@ from dolfin import dx, dot, grad, div, assemble
 import numpy as np
 from scipy.sparse import csr_matrix, lil_matrix, triu, tril, spdiags
 from scipy.sparse.linalg import spsolve
-# from scipy.sparse import diags, block_diag, vstack, hstack, csr_matrix, lil_matrix, spdiags,
 
 # Contains functions used in all scripts
 
@@ -38,22 +37,22 @@ def rel_err(new,old):
     '''
     return np.linalg.norm(new-old)/np.linalg.norm(old)
 
-def assemble_sparse(M):
+def assemble_sparse(a):
     '''
-    M is a matrix assembled with dolfin of type dolfin.cpp.la.Matrix.
-    The output is a sparse, csr matrix.
+    a is an integral that can be assembled to dolfin.cpp.la.Matrix.
+    The function converts it to a sparse, csr matrix.
     '''
-    mat = df.as_backend_type(M).mat()
+    A = df.assemble(a)
+    mat = df.as_backend_type(A).mat()
     csr = csr_matrix(mat.getValuesCSR()[::-1], shape=mat.size)
     return csr
 
-def assemble_sparse_lil(M):
+def assemble_sparse_lil(a):
     '''
-    M is a matrix assembled with dolfin of type dolfin.cpp.la.Matrix.
-    The output is a sparse, csr matrix.
+    a is an integral that can be assembled to dolfin.cpp.la.Matrix.
+    The function converts it to a sparse, csr matrix of the form lil.
     '''
-    mat = df.as_backend_type(M).mat()
-    csr = csr_matrix(mat.getValuesCSR()[::-1], shape=mat.size)
+    csr = assemble_sparse(a)
     return lil_matrix(csr)
 
 def vec_to_function(vec, V):
@@ -187,8 +186,8 @@ def L2_norm_sq_Omega(phi, M):
     '''
     return phi.transpose() @ M @ phi
 
-def cost_functional_proj(u, w, c, d, s, uhatvec, num_steps, dt, M,
-                         c_lower, c_upper, beta):
+def cost_functional_proj(u, w, c, d, s, uhatvec, num_steps, dt, M, ## DEPRECATED
+                          c_lower, c_upper, beta):
     '''
     Evaluates the cost functional for given values of:
         u: state variable
@@ -203,11 +202,11 @@ def cost_functional_proj(u, w, c, d, s, uhatvec, num_steps, dt, M,
     '''
     proj = np.clip(c + s*d,c_lower,c_upper)
     func = (L2_norm_sq_Q(u + s*w - uhatvec, num_steps, dt, M) \
-         + beta*L2_norm_sq_Q(proj, num_steps, dt, M)) /2
+          + beta*L2_norm_sq_Q(proj, num_steps, dt, M)) /2
     return func
 
 def cost_functional_proj_FT(m, f, c, d, s, mhatvec, fhatvec, num_steps, 
-                               dt, M, c_lower, c_upper, beta):
+                                dt, M, c_lower, c_upper, beta): ## DEPRECATED
     '''
     Evaluates the cost functional for given values of 
         m,f: state variables
@@ -222,72 +221,190 @@ def cost_functional_proj_FT(m, f, c, d, s, mhatvec, fhatvec, num_steps,
     proj = np.clip(c + s*d, c_lower, c_upper)
     n = mhatvec.shape[0] # number of nodes
     func = (L2_norm_sq_Omega(m[num_steps * n :] - mhatvec, M)
-         + L2_norm_sq_Omega(f[num_steps * n :] - fhatvec, M)
-         + beta * L2_norm_sq_Q(proj, num_steps, dt, M)) /2
+          + L2_norm_sq_Omega(f[num_steps * n :] - fhatvec, M)
+          + beta * L2_norm_sq_Q(proj, num_steps, dt, M)) /2
     return func
-    
-def armijo_line_search(u, p, w, c, d, uhatvec, num_steps, dt, M, c_lower, 
-                        c_upper, beta, gam = 10**-4, max_iter = 5, s0 = 1,
-                        optim = 'alltime'):
+
+def cost_functional(var1, var1_target, projected_control, num_steps,
+                    dt, M, beta, optim='alltime',
+                    var2 = None, var2_target = None):
     '''
-    Performs Projected Armijo Line Search and returns optimal step size.
-    gam: parameter in tolerance for decrease in cost functional value
-    max_iter: max number of armijo iterations
-    s0: step size at the first iteration.
-    optim = {'alltime', 'finaltime'}
+    Evaluates the cost functional for given values of 
+        m,f: state variables
+        c: projected (!) control variable
+        s: stepsize
+        d: direction vector
+        mhatvec, fhatvec: desired states
+    c is shifted to c_n+1 and projected onto the set of admissible solutions.
+    Assume non-linear equation, thus m, f for new c are inputs.
+    Final-time optimization, i.e. desired states only at some final time T.
     '''
-    
-    k = 0 # counter
-    s = 1 # initial step size
-    # Stationarity measure: Norm of the projected gradient (Hinze, p. 107)
-    clip = np.clip(c + s * d, c_lower, c_upper)
-    grad_costfun_L2 = L2_norm_sq_Q(np.clip(c + s * d, c_lower, c_upper) - c, 
-                                  num_steps, dt, M)
-    n = uhatvec.shape[0]
-    Z = np.zeros(u.shape)
-    z = np.zeros(n)
-    print(f'{grad_costfun_L2=}')
-    if optim == 'alltime':
-        # verify before deleting
-        # costfun_init = (L2_norm_sq_Q(u - uhatvec, num_steps, dt, M)
-        #                 + beta * L2_norm_sq_Q(c, num_steps, dt, M)) / 2
-        costfun_init = cost_functional_proj(u, Z, c, d, s, uhatvec, num_steps, 
-                                            dt, M, c_lower, c_upper, beta)
+    # print(f'Calculating cost functional in the {optim} mode...')
+    if optim =='alltime':
+        func = 1/2 * L2_norm_sq_Q(var1 - var1_target, num_steps, dt, M)
+        if var2 is not None and var2_target is not None:
+            func += 1/2 * L2_norm_sq_Q(var2 - var2_target, num_steps, dt, M)
     elif optim == 'finaltime':
-        costfun_init = cost_functional_proj_FT(u, Z, c, d, s, uhatvec, z, 
-                                   num_steps, dt, M, c_lower, c_upper, beta)
+        nodes = var1_target.shape[0]
+        func = 1/2 * L2_norm_sq_Omega(var1[num_steps * nodes:] - var1_target, M)
+        if var2 is not None and var2_target is not None:
+            func += 1/2 * L2_norm_sq_Omega(var2[num_steps * nodes:] - var2_target, M)
     else:
         raise ValueError(f"The selected option {optim} is invalid.")
         
-    armijo = 10**5 # initialise the difference in cost function norm decrease
-    # note the negative sign in the condition comes from the descent direction
-    while armijo > -gam / s * grad_costfun_L2 and k < max_iter:
-        print(f'{k=}')
-
-        s = s0*( 1/2 ** k)
-        # Calculate the incremented u using the new step size
-        c_inc = np.clip(c - s * (beta * c - p), c_lower, c_upper)
+    func += beta/2 * L2_norm_sq_Q(projected_control, num_steps, dt, M)
+    
+    return func
+    
+def armijo_line_search(var1, c, d, var1_target, num_steps, dt, M, c_lower, 
+                        c_upper, beta, costfun_init, nodes, gam = 10**-4, 
+                        max_iter = 10, s0 = 1, w = None, example = None, V = None,
+                        dof_neighbors = None,
+                        optim = 'alltime', var2 = None, var2_target = None):
+    '''
+    Performs Projected Armijo Line Search and returns optimal step size.
+    Descent direction adjusted for a source control problem e.g. for the 
+    advection equation.
+    var1: the variable that is affected by a change in control variable in its 
+        equation
+    c: contro variable
+    d: descent direction, i.e. negative of the gradient 
+    var1_target, var2_target: target state for var1, var2
+    num_steps, dt: number of time steps and the corresponding step size
+    M: mass matrix
+    c_lower, c_upper: constants determining the admissible set for the control
+    beta: regularisation parameter
+    costfun_init: previous evaluation of the cost functional
+    gam: parameter in tolerance for decrease in the cost functional
+    max_iter: max number of armijo iterations
+    s0: step size at the first iteration.
+    w: in case of linear equations, increment amount in var1 
+    example: {'Schnak'} name of the  problem to solve in case of nonlinear equations
+    V: FunctionSpace on some mesh in case of nonlinear equations
+    optim = {'alltime', 'finaltime'}
+    var2: the second variable for systems of equations, to calculate cost fun.
+    
+    grad_costfun_L2: Stationarity measure defined as the norm of the projected 
+        gradient (Hinze, p. 107)
         
-        if optim == 'alltime':
-            cost2 = cost_functional_proj(u, w, c_inc, d, s, uhatvec, num_steps, 
-                                      dt, M, c_lower, c_upper, beta)
-        elif optim == 'finaltime':
-            u_inc = u + s*w
-            cost2 = cost_functional_proj_FT(u_inc, Z, c_inc, d, s, uhatvec, z, 
-                                      num_steps, dt, M, c_lower, c_upper, beta)
-        armijo = cost2 - costfun_init
-        grad_costfun_L2 = L2_norm_sq_Q(c_inc - c, num_steps, dt, M)
+    Note the negative sign in the armijo condition comes from the descent direction
+    '''
+    k = 0   # counter
+    s = s0  # initial step size
+    n = var1_target.shape[0]
+    
+    if w is None:
+        print('Assuming the equation is nonlinear, the increments in var1\
+              will be calculated at each armijo iteration')
+        print(f'{example}')
+        u = df.TrialFunction(V)
+        v = df.TestFunction(V)
+        Ad = assemble_sparse(dot(grad(u), grad(v)) * dx)
+        M_Lump = row_lump(M, nodes)
 
+    else:
+        print('The increment in {var1} is given.')
+     
+    grad_costfun_L2 = 1
+    # grad_costfun_L2 = L2_norm_sq_Q(np.clip(c + s * d, c_lower, c_upper) - c, 
+    #                                 num_steps, dt, M)
+    
+    armijo = 10**5 # initialise the difference in cost functional norm decrease
+    
+    
+    # while armijo > -gam / s * grad_costfun_L2 and k < max_iter:
+    while k < max_iter: # hard constraint: number of iterations
+    
+            # check if condition has been reached
+            if armijo > -gam / s * grad_costfun_L2 or armijo > 0: # not reached
+                print(f'{k=}')
+                s = s0*( 1/2 ** k)
+                # Calculate the incremented in c using the new step size
+                c_inc = np.clip(c + s * d, c_lower, c_upper)
+                
+                if w is None and example == 'Schnak': # solve the state equations for new values
+                    print('HERE IN ARMIJO')
+                    Du = 1/10
+                    Dv = 8.6676
+                    c_b = 0.9
+                    gamma = 230.82
+                    omega1 = 100
+                    omega2 = 0.6
+                    var1[nodes :] = np.zeros(num_steps * nodes)
+                    var2[nodes :] = np.zeros(num_steps * nodes)
+                    t = 0
+                    wind = df.Expression(('-(x[1]-0.5)*sin(2*pi*t)','(x[0]-0.5)*sin(2*pi*t)'), degree=4, pi = np.pi, t = t)
+                    print('Using time-dep. velocity field')
+                    for i in range(1, num_steps + 1):    # solve for uk(t_{n+1}), vk(t_{n+1})
+                        start = i * nodes
+                        end = (i + 1) * nodes
+                        t += dt
+                        wind.t = t
+                        A = assemble_sparse(dot(wind, grad(u)) * v * dx)
+    
+                        if i % 50 == 0:
+                            print('t = ', round(t, 4))
+                        
+                        var1_n = var1[start - nodes : start]
+                        var2_n = var2[start - nodes : start]
+                        c_np1 = c_inc[start : end]
+                        
+                        # Define previous time-step solution as a function
+                        var1_n_fun = vec_to_function(var1_n, V)
+                        var2_n_fun = vec_to_function(var2_n, V)
+                        c_np1_fun = vec_to_function(c_np1, V)
+                        
+                        # Solve for u using FCT (advection-dominated equation)
+                        mat_var1 = -(Du*Ad + omega1*A)
+                        rhs_var1 = np.asarray(assemble((gamma*(c_np1_fun + var1_n_fun**2 * var2_n_fun))* v * dx))
+                        var1[start : end] = FCT_alg(mat_var1, rhs_var1, var1_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat=gamma*M)
+    
+                        var1_np1_fun = vec_to_function(var1[start : end], V)
+                        M_u2 = assemble_sparse(var1_np1_fun * var1_np1_fun * u * v *dx)
+                        
+                        # Solve for v using a direct solver
+                        rhs_var2 = np.asarray(assemble((gamma*c_b)* v * dx))
+                        var2[start : end] = spsolve(M + dt*(Dv*Ad + omega2*A + gamma*M_u2), M@var2_n + dt*rhs_var2) 
+                     
+                        cost2 = cost_functional(var1, var1_target, c_inc, num_steps, 
+                                             dt, M, beta, optim=optim, 
+                                             var2 = var2, var2_target = var2_target)
+                        
+                elif w is not None: # increment in var1 is given as w
+                    print('wrong IN ARMIJO')
+                    var1_inc = var1 + s*w # assuming one variable only
+                    cost2 = cost_functional(var1_inc, var1_target, c_inc, num_steps, 
+                                            dt, M, beta, optim=optim)
+                else:
+                    raise ValueError(f"The selected combination of parameters\
+                                     {w=} and {example=} is invalid.")
 
-        k += 1
-        
-    print(f'Armijo exit at {k=} with {s=}')
+                armijo = cost2 - costfun_init
+                grad_costfun_L2 = L2_norm_sq_Q(c_inc - c, num_steps, dt, M)
+                
+                k += 1
+                print(f'{grad_costfun_L2=}')
+                print(f'{armijo=}')
+                print(f'{cost2=}, {costfun_init=}')
+                
+            else: # reached
+                break
+
+    print(f'\nArmijo exit at {k=} with {s=}')
+
+    if armijo < -gam / s * grad_costfun_L2:
+        print('Converged: Armijo condition satisfied.')
+    elif k >= max_iter:
+        print('Stopped: Maximum iterations exceeded for {max_iter=}.')
+    
     if optim == 'alltime':
         return s
     elif optim == 'finaltime':
-        return s, u_inc
-
-
+        if var2 is None:
+            return s, var1_inc
+        else: 
+            return s, var1, var2
+    
 
 def armijo_line_search_chtxs(m, f, q, c, d, mhatvec, fhatvec, Mat_fq, chi, Dm, Df, num_steps,
                              dt, nodes, M, M_Lump, Ad, c_lower, c_upper, beta, V, dof_neighbors, gam = 10**-4, 
@@ -318,7 +435,9 @@ def armijo_line_search_chtxs(m, f, q, c, d, mhatvec, fhatvec, Mat_fq, chi, Dm, D
     while armijo > - gam / s * grad_costfun_L2 and k < max_iter:
         s = s0*( 1/2 ** k)
         # Calculate the incremented c using the new step size
-        c_inc = np.clip(c - s * (beta * c - m * q), c_lower, c_upper)
+        # c_inc = np.clip(c - s * (beta * c - m * q), c_lower, c_upper)
+        c_inc = np.clip(c + s * d, c_lower, c_upper)
+
         print(f'{k =}')
         ########## calculate new m,f corresponding to c_inc ###################
         print('Solving state equations...')
@@ -356,11 +475,96 @@ def armijo_line_search_chtxs(m, f, q, c, d, mhatvec, fhatvec, Mat_fq, chi, Dm, D
                            fhatvec, num_steps, dt, M, c_lower, c_upper, beta)
         armijo = cost2 - costfun_init
         grad_costfun_L2 = L2_norm_sq_Q(c_inc - c, num_steps, dt, M)
-
+       
         k += 1
         
     print(f'Armijo exit at {k=} with {s=}')
     return s
+
+def armijo_line_search_sbr_drift(u, p, c, d, uhatvec, eps, drift, num_steps, dt, nodes, M, M_Lump, Ad, Arot,
+                                 c_lower, c_upper, beta, V, dof_neighbors, gam = 10**-4, max_iter = 5, s0 = 1,
+                                 optim = 'alltime'):
+        
+    '''
+    Performs Projected Armijo Line Search and returns optimal step size.
+    gam: parameter in tolerance for decrease in cost functional value
+    max_iter: max number of armijo iterations
+    s0: step size at the first iteration.
+    m,f: state variables
+    q: adjoint variable related to the control by the gradient equation
+    mhatvec, fhatvec: desired states for m, f at final time T
+    '''
+    
+
+    k = 0 # counter
+    s = 1 # initial step size
+    n = uhatvec.shape[0]
+    Z = np.zeros(u.shape)
+    z = np.zeros(n)
+    
+    w = df.TrialFunction(V)
+    v = df.TestFunction(V)
+    
+    # Stationarity measure: Norm of the projected gradient (Hinze, p. 107)
+    grad_costfun_L2 = L2_norm_sq_Q(np.clip(c + s * d, c_lower, c_upper) - c,
+                                 num_steps, dt, M)
+    print(f'{grad_costfun_L2=}')
+    
+    if optim == 'alltime':
+        costfun_init = cost_functional_proj(u, Z, c, d, s, uhatvec, 
+                               num_steps, dt, M, c_lower, c_upper, beta)
+    elif optim == 'finaltime':
+        costfun_init = cost_functional_proj_FT(u, Z, c, d, s, uhatvec, z, 
+                                    num_steps, dt, M, c_lower, c_upper, beta)
+        
+    armijo = 10**5 # initialise the difference in cost function norm decrease
+    # note the negative sign in the condition comes from the descent direction
+    while armijo > - gam / s * grad_costfun_L2 and k < max_iter:
+        s = s0*( 1/2 ** k)
+        # Calculate the incremented c using the new step size
+        c_inc = np.clip(c + s * d, c_lower, c_upper)
+        print(f'{k =}')
+        ########## calculate new m,f corresponding to c_inc ###################
+        print('Solving state equations...')
+        t=0
+        # initialise u and keep ICs
+        u[nodes:] = np.zeros(num_steps * nodes)
+        for i in range(1,num_steps+1):    # solve for f(t_{n+1}), m(t_{n+1})
+            start = i * nodes
+            end = (i + 1) * nodes
+            t += dt
+            if i % 20 == 0:
+                print('t =', round(t, 4))
+            
+            u_n = u[start - nodes : start] # uk(t_n)
+            c_inc_fun = vec_to_function(c_inc[start : end], V)
+
+            u_rhs = np.zeros(nodes)
+            
+            Adrift1 = assemble_sparse(dot(drift, grad(c_inc_fun)) * w * v * dx) # pseudo-mass matrix
+            Adrift2 = assemble_sparse(dot(drift, grad(v)) * c_inc_fun * w * dx) # pseudo-stiffness matrix
+            
+            ## System matrix for the state equation
+            A_u = - eps * Ad + Arot + Adrift1 + Adrift2
+            
+            u[start:end] = FCT_alg(A_u, u_rhs, u_n, dt, nodes, M, M_Lump, dof_neighbors)
+            
+            
+        #######################################################################
+        if optim == 'alltime':
+            cost2 = cost_functional_proj(u, Z, c_inc, d, s, uhatvec, 
+                                    num_steps, dt, M, c_lower, c_upper, beta)
+        elif optim == 'finaltime':   
+            cost2 = cost_functional_proj_FT(u, Z, c_inc, d, s, uhatvec, z, 
+                                        num_steps, dt, M, c_lower, c_upper, beta)
+            
+        armijo = cost2 - costfun_init
+        grad_costfun_L2 = L2_norm_sq_Q(c_inc - c, num_steps, dt, M)
+
+        k += 1
+        
+    print(f'Armijo exit at {k=} with {s=}')
+    return s, u
 
 def rhs_chtx_m(m_fun, v):
     return np.asarray(assemble(4*m_fun * v * dx))
@@ -376,21 +580,21 @@ def rhs_chtx_q(q_fun, m_fun, p_fun, chi, dt, v):
                         dt * div(chi * m_fun * grad(p_fun)) * v * dx))
     
 def mat_chtx_m(f_fun, m_fun, Dm, chi, u, v):
-    Ad = assemble_sparse(assemble(dot(grad(u), grad(v)) * dx))
-    Aa = assemble_sparse(assemble(dot(grad(f_fun), grad(v)) * u * dx))
-    Ar = assemble_sparse(assemble(m_fun * u * v * dx))
+    Ad = assemble_sparse(dot(grad(u), grad(v)) * dx)
+    Aa = assemble_sparse(dot(grad(f_fun), grad(v)) * u * dx)
+    Ar = assemble_sparse(m_fun * u * v * dx)
     return - Dm * Ad + chi * Aa + Ar
 
 def mat_chtx_p(f_fun, m_fun, Dm, chi, u, v):
-    Ad = assemble_sparse(assemble(dot(grad(u), grad(v)) * dx))
-    Aa = assemble_sparse(assemble(dot(grad(f_fun), grad(v)) * u * dx))
-    Adf = assemble_sparse(assemble(div(grad(f_fun)) * u * v * dx))
-    Ar = assemble_sparse(assemble((4 - 2 * m_fun) * u * v * dx))
+    Ad = assemble_sparse(dot(grad(u), grad(v)) * dx)
+    Aa = assemble_sparse(dot(grad(f_fun), grad(v)) * u * dx)
+    Adf = assemble_sparse(div(grad(f_fun)) * u * v * dx)
+    Ar = assemble_sparse((4 - 2 * m_fun) * u * v * dx)
     return - Dm * Ad - chi * Aa - chi * Adf + Ar
     
 
 
-def FCT_alg(A, d, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat = None):
+def FCT_alg(A, rhs, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat = None):
 
     D = artificial_diffusion_mat(A)
     M_diag = M.diagonal()
@@ -399,15 +603,16 @@ def FCT_alg(A, d, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat = None):
     ## 1. Calculate low-order solution u^{n+1} using previous time step solution
     if source_mat is None:
         Mat_u_Low = M_Lump - dt * (A + D)
-    else:
-        Mat_u_Low = M_Lump - dt * (A + D + source_mat)
 
-    Rhs_u_Low = M_Lump @ u_n + dt * d
-    u_Low = spsolve(Mat_u_Low, Rhs_u_Low)
+    else:
+        Mat_u_Low = M_Lump - dt * (A + D - source_mat)
+
+    rhs_u_Low = M_Lump @ u_n + dt * rhs
+    u_Low = spsolve(Mat_u_Low, rhs_u_Low)
     
     ## 2. Calculate raw antidiffusive flux
     # approximate the derivative du/dt using Chebyshev semi-iterative method
-    rhs_du_dt = np.squeeze(np.asarray(A @ u_Low + d)) # flatten to vector array
+    rhs_du_dt = np.squeeze(np.asarray(A @ u_Low + rhs)) # flatten to vector array
     du_dt = ChebSI(rhs_du_dt, M, M_diag, 20, 0.5, 2)
     
     # corrected flux calculation(only use neighbouring nodes):
@@ -459,4 +664,4 @@ def FCT_alg(A, d, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat = None):
     
     ## 4. Correct u_Low^{n+1} explicitly:
     u_np1 = u_Low + dt*Fbar/M_Lump_diag
-    return u_np1
+    return u_np1 #, Mat_u_Low, D

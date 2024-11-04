@@ -52,7 +52,8 @@ chi = 8.5
 
 t0 = 0
 dt = 0.1
-T = 14
+T = 1
+T_sim = 14
 num_steps = round((T-t0)/dt)
 tol = 10**-2 # !!!
 example_name = 'mimura_tsujikawa'
@@ -79,13 +80,13 @@ dof_neighbors = find_node_neighbours(mesh, nodes, vertextodof)
 ###############################################################################
 
 # Mass matrix
-M = assemble_sparse_lil(assemble(u * v * dx))
+M = assemble_sparse_lil(u * v * dx)
 
 # Row-lumped mass matrix
 M_Lump = row_lump(M, nodes)
 
 # Stiffness matrix
-Ad = assemble_sparse(assemble(dot(grad(u), grad(v)) * dx))
+Ad = assemble_sparse(dot(grad(u), grad(v)) * dx)
 
 # System matrix: equation for f and q
 Mat_fq = M + dt * (Df * Ad + delta * M)
@@ -104,8 +105,8 @@ plt.colorbar()
 plt.show()
 
 # imported in dof ordering
-mhat_T = data_helpers.get_data_array('m', example_name, T)
-fhat_T = data_helpers.get_data_array('f', example_name, T)
+mhat_T = data_helpers.get_data_array('m', example_name, T_sim)
+fhat_T = data_helpers.get_data_array('f', example_name, T_sim)
 # mhat_T = reorder_vector_to_dof_time(mhat_T_orig, 1, nodes, vertextodof)
 # fhat_T = reorder_vector_to_dof_time(fhat_T_orig, 1, nodes, vertextodof)
 
