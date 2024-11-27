@@ -7,6 +7,8 @@ from datetime import timedelta
 from scipy.integrate import simps
 from helpers import *
 
+from pathlib import Path
+
 # ---------------------------------------------------------------------------
 ### Flux-corrected transport method for the advection(-diffusion) equation
 #  du/dt - eps*grad^2(u) + w \dot grad(u)) = c + g       in Ωx[0,T]
@@ -26,22 +28,17 @@ a1 = -1
 a2 = 1
 deltax = 0.1/2/2
 intervals_line = round((a2-a1)/deltax)
-# box constraints for c, exact solution is in [0,1]
-e1 = 0.2
-e2 = 0.3
-k1 = 1
-k2 = 1
 # slit_width = 0.05 
-slit_width = 0.1
+# slit_width = 0.1
 
 # diffusion coefficient
-eps = 0 #0.001
+eps = 0
 om = np.pi/40 
 # if om = np.pi/10 & dt=0.1, at T=2 the body rotates into starting position
 
 t0 = 0
 dt = 0.001 #deltax**2 #
-T = 0.5 #2
+T = 0.8
 num_steps = round((T-t0)/dt)
 
 # Initialize a square mesh
@@ -59,21 +56,26 @@ X, Y = np.meshgrid(X,Y)
 
 show_plots = True
 
-filename_start = 'Gaussian_drift_025_c10/gaussian_t'
+filename_start = 'Gaussian_drift_T1_bottomleft_c_05/gaussian_t'
+if not Path(filename_start).exists():
+    Path(filename_start).mkdir(parents=True)
 
 def u_init(X,Y):
     '''
     Function for the true solution.
     Input = mesh grid (X,Y = square 2D arrays with the same dimensions), time
     '''
-    c = 20/2
+    c = 20
     d = 5
-    out = np.exp(-c *( X**2 + d*(Y-1/3)**2))
+    x1 = -2/3
+    y1 = -5/6
+    out = np.exp(-c *( (X-x1)**2 + d*(Y-y1)**2))
     return out
 
 def velocity(X,Y):
-    wind = Expression(('-x[1]','x[0]'), degree=4)
-    move = Expression(('2','2'), degree=4)
+    # wind = Expression(('-x[1]','x[0]'), degree=4) ## rotation
+    c = 2# 0.8 #2
+    move = Expression(('c','c'), degree=4, c=c) ## linear drift
     # return 1/om*wind + move
     
     ## drift only, no rotation
@@ -141,11 +143,12 @@ for i in range(1, num_steps + 1):    # solve for uk(t_{n+1})
     uk[start : end].tofile(filename_start + f'{t:.3f}_u.csv', sep = ',')
     
     uk_re = reorder_vector_from_dof_time(uk[start:end],1, nodes, vertextodof)
-
-    plt.imshow(uk_re.reshape((sqnodes,sqnodes)))
-    plt.colorbar()
-    plt.title(f'Computed state $u$ at t = {round(t,5)}')
-    plt.show()
+    
+    if i%10==0:
+        plt.imshow(uk_re.reshape((sqnodes,sqnodes)), extent=[a1,a2,a1,a2], origin='lower')
+        plt.colorbar()
+        plt.title(f'Computed state $u$ at t = {round(t,5)}')
+        plt.show()
         
 ###############################################################################    
 

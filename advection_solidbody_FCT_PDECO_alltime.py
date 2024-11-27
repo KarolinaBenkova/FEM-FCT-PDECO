@@ -44,16 +44,15 @@ a1 = -1
 a2 = 1
 deltax = 0.1/2/2
 intervals_line = round((a2-a1)/deltax)
-beta = 0.1
+beta = 0.01
 # box constraints for c, exact solution is in [0,1]
 c_upper = 5
 c_lower = 0
-e1 = 0.2
-e2 = 0.3
-k1 = 1
-k2 = 1
 # slit_width = 0.05
 # slit_width = 0.1
+
+control_target = 2
+T_target = 0.6
 
 # diffusion coefficient
 eps = 0
@@ -61,7 +60,7 @@ om = np.pi/40
 
 t0 = 0
 dt = 0.001
-T = 0.1
+T = 0.1#1
 num_steps = round((T-t0)/dt)
 tol = 10**-2 # !!!
 # example_name = 'solidbody'
@@ -70,8 +69,9 @@ example_name = 'gaussian'
 # folder_name = 'solid_body_rotation_drift_wideslit'
 # folder_name = 'Gaussian_rotation_drift_025'
 # folder_name = 'Gaussian_drift_025' # zero rotation
-folder_name = 'Gaussian_drift_025_c10' # zero rotation, lower exponent in absolute terms
-out_folder_name = f"advection_Gaussian_drift_c10_T{T}_beta{beta}_tol{tol}"
+# folder_name = 'Gaussian_drift_025_c10' # zero rotation, lower exponent in absolute terms
+folder_name = f'Gaussian_drift_T_{T_target}_bottomleft_c_{control_target}' # zero rotation
+out_folder_name = f"advection_Gaussian_drift_c_{control_target}_T{T}_beta{beta}_tol{tol}"
 if not Path(out_folder_name).exists():
     Path(out_folder_name).mkdir(parents=True)
     
@@ -103,15 +103,20 @@ def u_init(x,y):
     #             out[i,j] = 1
     #         else:
     #             out[i,j] = 0    
-    c = 20/2
+
+    # out = np.exp(-c *( x**2 + d*(y-1/3)**2))
+    c = 20
     d = 5
-    out = np.exp(-c *( x**2 + d*(y-1/3)**2))
+    x1 = -2/3
+    y1 = -5/6
+    out = np.exp(-c *( (x-x1)**2 + d*(y-y1)**2))
     print(f'Init. condition uses {c=}, {d=}')
     return out
 
 def velocity():
     wind = df.Expression(('-x[1]','x[0]'), degree=4)
-    print(f'Velocity field is 1/om*(-y,x) with {om=}')
+    # print(f'Velocity field is 1/om*(-y,x) with {om=}')
+    print('Not using rotation')
     return 1/om*wind
 
 drift = df.Constant(('1','1'))
@@ -325,22 +330,22 @@ while  (stop_crit_costfun >= tol) and it < 1000:
 
             ax = fig.add_subplot(1, 4, 1)
             im1 = ax.imshow(uhat_all_re_t)
-            cb1 = fig.colorbar(im1, ax=ax)
+            cb1 = fig.colorbar(im1, ax=ax, extent=[a1,a2,a1,a2], origin='lower')
             ax.set_title(f'{it=}, Desired state for $u$ at t = {round(tU, 5)}')
         
             ax = fig.add_subplot(1, 4, 2)
             im2 = ax.imshow(u_re)
-            cb2 = fig.colorbar(im2, ax=ax)
+            cb2 = fig.colorbar(im2, ax=ax, extent=[a1,a2,a1,a2], origin='lower')
             ax.set_title(f'Computed state $u$ at t = {round(tU, 5)}')
         
             ax = fig.add_subplot(1, 4, 3)
             im3 = ax.imshow(p_re)
-            cb3 = fig.colorbar(im3, ax=ax)
+            cb3 = fig.colorbar(im3, ax=ax, extent=[a1,a2,a1,a2], origin='lower')
             ax.set_title(f'Computed adjoint $p$ at t = {round(tP, 5)}')
         
             ax = fig.add_subplot(1, 4, 4)
             im4 = ax.imshow(c_re)
-            cb4 = fig.colorbar(im4, ax=ax)
+            cb4 = fig.colorbar(im4, ax=ax, extent=[a1,a2,a1,a2], origin='lower')
             ax.set_title(f'Computed control $c$ at t = {round(tP, 5)}')
         
             fig.tight_layout(pad=3.0)

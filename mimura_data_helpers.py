@@ -47,7 +47,17 @@ def m_initial_condition(a1, a2, deltax):
     # m0_array = np.ones((n,n)) + 0.5*(np.random.rand(n,n)-0.5*np.ones((n,n)))
     # m0_array = np.ones((n,n)) + con * np.cos(2 * np.pi * (X + Y)) + \
     # 0.01 * (sum(np.cos(2 * np.pi * X * i) for i in range(1, 9)))
-    m0_array = 1 + 0.2*np.cos(2*np.pi*X/5)*np.cos(2*np.pi*Y/5)
+    
+    # m0_array = 1 + 0.2*np.cos(2*np.pi*X/5)*np.cos(2*np.pi*Y/5)
+    
+    
+    # simplified feathers model
+    np.random.seed(5)
+    k = 20
+    # m0_array = 1.5 + 0.6*(0.5 - np.random.rand(n,n)) 
+    m0_array = 1.5*np.ones((n,n)) + con * np.cos(2 * np.pi / k * (X + Y)) + \
+    0.01 * (sum(np.cos(2 * np.pi / k * X * i) for i in range(1, 9)))
+    
     return m0_array
 
 def rhs_chtx_m(m_fun, v):
@@ -63,7 +73,7 @@ def rhs_chtx_f(f_fun, m_fun, dt, v):
     # modified to have c = 1 (multiplying m)
     # return np.asarray(assemble(f_fun * v * dx  + dt * m_fun * v * dx))
 
-    ## painter ptashnyk headon 2021 
+    ## painter ptashnyk headon 2021 and simplified feathers model
     return np.asarray(assemble(f_fun * v * dx  + dt * m_fun * v * dx))
 
 
@@ -81,9 +91,10 @@ def mat_chtx_m(f_fun, m_fun, Dm, chi, u, v):
     Ar = np.zeros(Ad.shape)
 
     # return - Dm * Ad + chi * Aa + Ar
-    ## painter ptashnyk headon 2021 
+    ## painter ptashnyk headon 2021 and simplified feathers model
     beta = 0.5
     Aa = assemble_sparse(exp(-beta*m_fun)*dot(grad(f_fun), grad(v)) * u * dx)
+    
     
     return - Dm * Ad + chi*Aa
 

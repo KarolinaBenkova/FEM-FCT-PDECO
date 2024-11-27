@@ -7,10 +7,10 @@ from helpers import *
 
 # ---------------------------------------------------------------------------
 ### Flux-corrected transport method for the PDECO problem for the Schnakenberg model
-# min_{u,v,a,b} beta1/2*||u-\hat{u}||^2 + beta2/2*||v-\hat{v}||^2 + alpha1/2*||a||^2 + alpha2/2*||b||^2  (norms in L^2)
+# min_{u,v,a,b} alpha1/2*||u-\hat{u}||^2 + alpha2/2*||v-\hat{v}||^2 + beta1/2*||a||^2 + beta2/2*||b||^2  (norms in L^2)
 # subject to:
-#   du/dt - Du grad^2 u + om1 w \cdot grad(u) + gamma(u-u^2v-a) = 0       in Ω
-#   dv/dt - Dv grad^2 v + om2 w \cdot grad(v) + gamma(u^2v-b)   = 0       in Ω
+#   -Du grad^2 u + om1 w \cdot grad(u) + gamma(u-u^2v-a) = 0       in Ω
+#   -Dv grad^2 v + om2 w \cdot grad(v) + gamma(u^2v-b)   = 0       in Ω
 #                        zero flux BCs       on ∂Ω
 #                                     u(0) = u0(x)       in Ω
 
@@ -23,6 +23,7 @@ a1 = 0
 a2 = 1
 deltax = 0.01*2
 intervals_line = round((a2 - a1) / deltax)
+alpha = 1
 beta = 0.1
 # box constraints for c, exact solution is in [0,1]
 c_upper = 0.5
@@ -41,10 +42,10 @@ dt = 0.001*2
 T = 0.2
 T_data = 0.2
 num_steps = round((T-t0)/dt)
-tol = 10**-4 #5*10**-3 # !!!
+tol = 10**-4 # !!!
 
 example_name = f"Schnak_adv_Du{Du}_timedep_vel_coarse/Schnak_adv"
-out_folder_name = f"Schnak_adv_FT_Du{Du}_timedep_vel_T{T}_beta{beta}_tol{tol}_ckinit_0.1_cupper{c_upper}pert_coarse_Nt100_v1"
+out_folder_name = f"Schnak_adv_AT_Du{Du}_timedep_vel_T{T}_beta{beta}_tol{tol}_ckinit_zero_coarse_Nt100"
 if not Path(out_folder_name).exists():
     Path(out_folder_name).mkdir(parents=True)
 
@@ -74,8 +75,6 @@ boundary_nodes, boundary_nodes_dof = generate_boundary_nodes(nodes, vertextodof)
 
 mesh.init(0, 1)
 dof_neighbors = find_node_neighbours(mesh, nodes, vertextodof)
-
-np.random.seed(5)
 
 ###############################################################################
 ################### Define the stationary matrices ###########################
@@ -112,12 +111,10 @@ u0_orig, v0_orig = init_conditions(X, Y)
 u0 = reorder_vector_to_dof_time(u0_orig.reshape(nodes), 1, nodes, vertextodof)
 v0 = reorder_vector_to_dof_time(v0_orig.reshape(nodes), 1, nodes, vertextodof)
 
-# uhat_T = np.zeros(nodes)
-# vhat_T = np.zeros(nodes)
-uhat_T = np.genfromtxt(example_name + f'_uT{T_data:03}.csv', delimiter=',')
-vhat_T = np.genfromtxt(example_name + f'_vT{T_data:03}.csv', delimiter=',')
-uhat_T_re = reorder_vector_from_dof_time(uhat_T, 1, nodes, vertextodof).reshape((sqnodes,sqnodes))
-vhat_T_re = reorder_vector_from_dof_time(vhat_T, 1, nodes, vertextodof).reshape((sqnodes,sqnodes))
+uhat = np.genfromtxt(example_name + f'_u.csv', delimiter=',')[:(num_steps+1)*nodes]
+vhat = np.genfromtxt(example_name + f'_v.csv', delimiter=',')[:(num_steps+1)*nodes]
+uhat_re = reorder_vector_from_dof_time(uhat, num_steps + 1, nodes, vertextodof)
+vhat_re = reorder_vector_from_dof_time(vhat, num_steps + 1, nodes, vertextodof)
 
 ###############################################################################
 ########################### Initial guesses for GD ############################
@@ -128,7 +125,7 @@ uk = np.zeros(vec_length)
 vk = np.zeros(vec_length)
 pk = np.zeros(vec_length)
 qk = np.zeros(vec_length)
-ck = 0.1*np.ones(vec_length) + 0.01*(np.random.rand(vec_length)-0.5) #np.zeros(vec_length)
+ck = np.zeros(vec_length) #np.ones(vec_length)
 dk = np.zeros(vec_length)
 uk[:nodes] = u0
 vk[:nodes] = v0
@@ -139,9 +136,9 @@ sk = 0
 ###############################################################################
 
 it = 0
-cost_fun_k = 10*cost_functional(uk, uhat_T, ck, num_steps, dt, M, beta, 
-                                var2 = vk, var2_target = vhat_T,
-                                optim='finaltime')
+cost_fun_k = 10*cost_functional(uk, uhat, ck, num_steps, dt, M, beta, 
+                                var2 = vk, var2_target = vhat,
+                                optim='alltime')
 cost_fun_vals = []
 cost_fidelity_vals_u = []
 cost_fidelity_vals_v = []
@@ -171,6 +168,7 @@ while stop_crit >= tol and it<1000:
         end = (i + 1) * nodes
         t += dt
         wind.t = t
+        A = assemble_sparse(dot(wind, grad(u)) * w * dx)
 
         if i % 50 == 0:
             print('t = ', round(t, 4))
@@ -185,7 +183,6 @@ while stop_crit >= tol and it<1000:
         c_np1_fun = vec_to_function(c_np1, V)
         
         # Solve for u using FCT (advection-dominated equation)
-        A = assemble_sparse(dot(wind, grad(u)) * w * dx)
         mat_u = -(Du*Ad + omega1*A)
         rhs_u = np.asarray(assemble((gamma*(c_np1_fun + u_n_fun**2 * v_n_fun))* w * dx))
         uk[start : end] = FCT_alg(mat_u, rhs_u, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat=gamma*M)
@@ -196,20 +193,6 @@ while stop_crit >= tol and it<1000:
         # Solve for v using a direct solver
         rhs_v = np.asarray(assemble((gamma*c_b)* w * dx))
         vk[start : end] = spsolve(M + dt*(Dv*Ad + omega2*A + gamma*M_u2), M@v_n + dt*rhs_v) 
-        
-        # # v2: different weak formulation for advection matrix (corresponding signs also change)
-        # # Solve for u using FCT (advection-dominated equation)
-        # A = assemble_sparse(dot(wind, grad(w)) * u * dx)
-        # mat_u = -(Du*Ad - omega1*A)
-        # rhs_u = np.asarray(assemble((gamma*(c_np1_fun + u_n_fun**2 * v_n_fun))* w * dx))
-        # uk[start : end] = FCT_alg(mat_u, rhs_u, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat=gamma*M)
-
-        # u_np1_fun = vec_to_function(uk[start : end], V)
-        # M_u2 = assemble_sparse(u_np1_fun * u_np1_fun * u * w *dx)
-        
-        # # Solve for v using a direct solver
-        # rhs_v = np.asarray(assemble((gamma*c_b)* w * dx))
-        # vk[start : end] = spsolve(M + dt*(Dv*Ad - omega2*A + gamma*M_u2), M@v_n + dt*rhs_v) 
             
     ###########################################################################
     ############## Solve the adjoint equations using FCT for p ################
@@ -217,9 +200,6 @@ while stop_crit >= tol and it<1000:
     
     qk = np.zeros(vec_length) 
     pk = np.zeros(vec_length)
-    # insert final-time condition
-    qk[num_steps * nodes :] = vhat_T - vk[num_steps * nodes :]
-    pk[num_steps * nodes :] = uhat_T - uk[num_steps * nodes :]
     t = T
     print('Solving adjoint equations...')
     for i in reversed(range(0, num_steps)): # solve for pk(t_n), qk(t_n)
@@ -237,9 +217,12 @@ while stop_crit >= tol and it<1000:
         u_n_fun = vec_to_function(uk[start : end], V)      # uk(t_n)
         v_n_fun = vec_to_function(vk[start : end], V)      # vk(t_n)
         c_n_fun = vec_to_function(ck[start : end], V)      # ck(t_n)
+        uhat_fun = vec_to_function(uhat[start:end], V)
+        vhat_fun = vec_to_function(vhat[start:end], V)
         
         wind.t = t
         wind_fun = project(wind, W)
+        A = assemble_sparse(div(wind_fun*u) * w * dx)
         
         ## Approach 1: first solve for p, then for q
         ### needs to be fixed
@@ -252,10 +235,11 @@ while stop_crit >= tol and it<1000:
         
         # qk[start:end] = spsolve(M + dt*(Dv*Ad - omega2*A + gamma*M_u2), M@q_np1 + dt*rhs_q) 
         
-        # Approach 2: first solve for q, then for p
-        A = assemble_sparse(div(wind_fun*u) * w * dx)
+        ## Approach 2: first solve for q, then for p
         M_u2 = assemble_sparse(u_n_fun * u_n_fun * u * w *dx)
         rhs_q = np.asarray(assemble(gamma * p_np1_fun * u_n_fun**2 * w * dx))
+        rhs_q += np.asarray(assemble(alpha*(vhat_fun - v_n_fun)* w * dx))
+
         qk[start:end] = spsolve(M + dt*(Dv*Ad - omega2*A + gamma*M_u2), M@q_np1 + dt*rhs_q) 
         
         q_n_fun = vec_to_function(qk[start:end], V)
@@ -263,24 +247,13 @@ while stop_crit >= tol and it<1000:
         mat_p = -Du*Ad + omega1*A
         M_uv = assemble_sparse(u_n_fun * v_n_fun * u * w *dx)
         rhs_p = np.asarray(assemble(- 2 * gamma * u_n_fun * v_n_fun * q_n_fun * w * dx))
+        rhs_p += np.asarray(assemble(alpha*(uhat_fun - u_n_fun)* w * dx))
+
         
         pk[start:end] = FCT_alg(mat_p, rhs_p, p_np1, dt, nodes, M, M_Lump, 
                                 dof_neighbors, source_mat=gamma*M - 2*gamma*M_uv)
-       
-        # ## Approach 2 v2: first solve for q, then for p & different weak formulation for advection matrix (signs don't change)
-        # A = assemble_sparse(dot(wind, grad(u)) * w * dx)
-        # M_u2 = assemble_sparse(u_n_fun * u_n_fun * u * w *dx)
-        # rhs_q = np.asarray(assemble(gamma * p_np1_fun * u_n_fun**2 * w * dx))
-        # qk[start:end] = spsolve(M + dt*(Dv*Ad - omega2*A + gamma*M_u2), M@q_np1 + dt*rhs_q) 
-        
-        # q_n_fun = vec_to_function(qk[start:end], V)
-        
-        # mat_p = -Du*Ad + omega1*A
-        # M_uv = assemble_sparse(u_n_fun * v_n_fun * u * w *dx)
-        # rhs_p = np.asarray(assemble(- 2 * gamma * u_n_fun * v_n_fun * q_n_fun * w * dx))
-        
-        # pk[start:end] = FCT_alg(mat_p, rhs_p, p_np1, dt, nodes, M, M_Lump, 
-        #                         dof_neighbors, source_mat=gamma*M - 2*gamma*M_uv)
+
+        p_np1_fun = vec_to_function(pk[end : end + nodes], V)
            
     ###########################################################################
     ##################### 3. choose the descent direction #####################
@@ -294,23 +267,23 @@ while stop_crit >= tol and it<1000:
     print(f'{cost_fun_k=}')
     
     print('Starting Armijo line search...')
-    sk, u_inc, v_inc = armijo_line_search(uk, ck, dk, uhat_T, num_steps, dt, M, 
+    sk, u_inc, v_inc = armijo_line_search(uk, ck, dk, uhat, num_steps, dt, M, 
                           c_lower, c_upper, beta, cost_fun_k, nodes,  V = V,
-                          optim = 'finaltime', dof_neighbors= dof_neighbors,
-                          example = 'Schnak', var2 = vk, var2_target = vhat_T)
+                          optim = 'alltime', dof_neighbors= dof_neighbors,
+                          example = 'Schnak', var2 = vk, var2_target = vhat)
     
     ###########################################################################
     ## 5. Calculate new control and project onto admissible set
     ###########################################################################
 
     ckp1 = np.clip(ck + sk*dk,c_lower,c_upper)
-    cost_fun_kp1 = cost_functional(u_inc, uhat_T, ckp1, num_steps, dt, M, beta,
-                           optim='finaltime', var2 = v_inc, var2_target=vhat_T)
+    cost_fun_kp1 = cost_functional(u_inc, uhat, ckp1, num_steps, dt, M, beta,
+                           optim='alltime', var2 = v_inc, var2_target=vhat)
     print(f'{cost_fun_kp1=}')
 
     cost_fun_vals.append(cost_fun_kp1)
-    cost_fidelity_vals_u.append(L2_norm_sq_Omega(u_inc[num_steps*nodes:] - uhat_T, M))
-    cost_fidelity_vals_v.append(L2_norm_sq_Omega(v_inc[num_steps*nodes:] - vhat_T, M))
+    cost_fidelity_vals_u.append(L2_norm_sq_Q(u_inc - uhat, num_steps, dt, M))
+    cost_fidelity_vals_v.append(L2_norm_sq_Q(v_inc - vhat, num_steps, dt, M))
     cost_control_vals.append(L2_norm_sq_Q(ckp1, num_steps, dt, M))
     
     max_ck = []
@@ -318,6 +291,7 @@ while stop_crit >= tol and it<1000:
         start = i * nodes
         end = (i+1) * nodes
         max_ck.append(np.amax(ck[start:end]))
+    np.mean(max_ck)
     print('Mean of the control maxima over time steps:', np.mean(max_ck))
     mean_control_vals.append(np.mean(max_ck))
         
@@ -332,6 +306,7 @@ while stop_crit >= tol and it<1000:
     ck_re = reorder_vector_from_dof_time(ck, num_steps + 1, nodes, vertextodof)
     pk_re = reorder_vector_from_dof_time(pk, num_steps + 1, nodes, vertextodof)
     qk_re = reorder_vector_from_dof_time(qk, num_steps + 1, nodes, vertextodof)
+    
 
     for i in range(num_steps):
         startP = i * nodes
@@ -347,21 +322,26 @@ while stop_crit >= tol and it<1000:
         c_re = ck_re[startP : endP]
         p_re = pk_re[startP : endP]
         q_re = qk_re[startP : endP]
+        uhat_re_t = uhat_re[startU : endU]
+        vhat_re_t = vhat_re[startU : endU]
             
         u_re = u_re.reshape((sqnodes,sqnodes))
         v_re = v_re.reshape((sqnodes,sqnodes))
         c_re = c_re.reshape((sqnodes,sqnodes))
         p_re = p_re.reshape((sqnodes,sqnodes))
         q_re = q_re.reshape((sqnodes,sqnodes))
+        uhat_re_t = uhat_re_t.reshape((sqnodes,sqnodes))
+        vhat_re_t = vhat_re_t.reshape((sqnodes,sqnodes))
+        
         
         if show_plots is True and (i%5 == 0 or i == num_steps-1):
             
             fig = plt.figure(figsize=(20, 10))
 
             ax = fig.add_subplot(2, 4, 1)
-            im1 = ax.imshow(uhat_T_re)
+            im1 = ax.imshow(uhat_re_t)
             cb1 = fig.colorbar(im1, ax=ax)
-            ax.set_title(f'{it=}, Desired state for $u$ at t = {T}')
+            ax.set_title(f'{it=}, Desired state for $u$ at t = {round(tU, 5)}')
         
             ax = fig.add_subplot(2, 4, 2)
             im2 = ax.imshow(u_re)
@@ -379,9 +359,9 @@ while stop_crit >= tol and it<1000:
             ax.set_title(f'Computed control $c$ at t = {round(tP, 5)}')
             
             ax = fig.add_subplot(2, 4, 5)
-            im5 = ax.imshow(vhat_T_re)
+            im5 = ax.imshow(vhat_re_t)
             cb5 = fig.colorbar(im1, ax=ax)
-            ax.set_title(f'{it=}, Desired state for $v$ at t = {T}')
+            ax.set_title(f'{it=}, Desired state for $v$ at t = {round(tU, 5)}')
         
             ax = fig.add_subplot(2, 4, 6)
             im6 = ax.imshow(v_re)
@@ -459,22 +439,12 @@ ck.tofile(out_folder_name + f'/Schnak_adv_T{T}_beta{beta}_c.csv', sep = ',')
 pk.tofile(out_folder_name + f'/Schnak_adv_T{T}_beta{beta}_p.csv', sep = ',')
 qk.tofile(out_folder_name + f'/Schnak_adv_T{T}_beta{beta}_q.csv', sep = ',')
 
-
 print(f'Exit:\n Stop. crit.: {stop_crit}\n Iterations: {it}\n dx={deltax}')
 print(f'{dt=}, {T=}, {beta=}')
 print('Solutions saved to the folder:', out_folder_name)
-print('L2_\Omega^2 (u(T) - uhat_T)=', L2_norm_sq_Omega(uk[num_steps*nodes]-uhat_T,M))
-print('L2_\Omega^2 (v(T) - vhat_T)=', L2_norm_sq_Omega(vk[num_steps*nodes]-vhat_T,M))
+print('L2_Q^2 (u - uhat)=', L2_norm_sq_Q(uk-uhat, num_steps, dt, M))
+print('L2_Q^2 (v - vhat)=', L2_norm_sq_Q(vk-vhat, num_steps, dt, M))
 
-print('Max. of the control at final time step:', np.amax(ck[num_steps*nodes:]))
-print('Min. of the control at final time step:', np.amin(ck[num_steps*nodes:]))
-print('Mean of the control at final time step:', np.mean(ck[num_steps*nodes:]))
-
-means_ck = []
-for i in range(num_steps):
-    start = i * nodes
-    end = (i+1) * nodes
-    means_ck.append(np.mean(ck[start:end]))
-plt.plot(means_ck)
-plt.title('Mean of c at each time step, final iteration')
-plt.show()
+# print('Max. of the control at final time step:', np.amax(ck[num_steps*nodes:]))
+# print('Min. of the control at final time step:', np.amin(ck[num_steps*nodes:]))
+# print('Mean of the control at final time step:', np.mean(ck[num_steps*nodes:]))

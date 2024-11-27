@@ -3,10 +3,6 @@ from pathlib import Path
 from dolfin import *
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.sparse import diags, block_diag, vstack, hstack, csr_matrix, lil_matrix, spdiags, triu, tril
-from timeit import default_timer as timer
-from datetime import timedelta
-from scipy.integrate import simps
 from helpers import *
 
 # ---------------------------------------------------------------------------
@@ -23,7 +19,7 @@ from helpers import *
 ## Define the parameters
 a1 = 0
 a2 = 1
-deltax = 0.01
+deltax = 0.01*2
 intervals_line = round((a2-a1)/deltax)
 e1 = 0.2
 e2 = 0.3
@@ -45,7 +41,7 @@ num_steps = round((T-t0)/dt)
 
 # # Setup used in Garzon-Alvarado et al (2011)
 # eps = 1 #1/10
-Du = 1/10
+Du = 1/100
 Dv = 8.6676
 c_a = 0.1
 c_b = 0.9
@@ -75,7 +71,7 @@ Y = np.arange(a1, a2 + deltax, deltax)
 X, Y = np.meshgrid(X,Y)
 
 show_plots = True
-out_folder_name = f"Schnak_adv_Du{Du}_timedep_vel"
+out_folder_name = f"Schnak_adv_Du{Du}_timedep_vel_coarse"
 if not Path(out_folder_name).exists():
     Path(out_folder_name).mkdir(parents=True)
     
