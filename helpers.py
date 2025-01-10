@@ -98,14 +98,21 @@ def sparse_nonzero(H):
 def artificial_diffusion_mat(mat):
     '''
     Generates artificial diffusion matrix for a given flux matrix.
+    For a flux matrix (defined to be on the RHS of the equation), adding the
+    artificial diffusion matrix cancels its negative off-diagonal coefficients.
     '''
-    neg_upper = -triu(mat, k=1, format='csr')
+    # Flip the sign of upper and lower part of mat, ignoring the diagonal
+    neg_upper = -triu(mat, k=1, format='csr')  
     neg_lower = -tril(mat, k=-1, format='csr')
-    D_upper = neg_upper.maximum(0)
+    # Only keep the entries that were originally negative
+    D_upper = neg_upper.maximum(0) 
     D_lower = neg_lower.maximum(0)
+    # Form D by adding lower and upper parts together
     D = D_upper + D_lower
-    D = D.maximum(D.transpose())  # Ensure D is symmetric
-    D.setdiag(-D.sum(axis = 1)) # Set the diagonal entries to negative row sums
+    # Ensure D is symmetric
+    D = D.maximum(D.transpose())
+    # Set the diagonal entries to negative row sums
+    D.setdiag(-D.sum(axis = 1)) 
     return D
 
 def generate_boundary_nodes(nodes, vertextodof):
@@ -284,7 +291,7 @@ def armijo_line_search(var1, c, d, var1_target, num_steps, dt, M, c_lower,
     optim = {'alltime', 'finaltime'}
     var2: the second variable for systems of equations, to calculate cost fun.
     
-    grad_costfun_L2: Stationarity measure defined as the norm of the projected 
+    control_dif_L2: Stationarity measure defined as the norm of the projected 
         gradient (Hinze, p. 107)
         
     Note the negative sign in the armijo condition comes from the descent direction
@@ -303,18 +310,18 @@ def armijo_line_search(var1, c, d, var1_target, num_steps, dt, M, c_lower,
     else:
         print('The increment in {var1} is given.')
      
-    grad_costfun_L2 = 1
+    control_dif_L2 = 1
     # grad_costfun_L2 = L2_norm_sq_Q(np.clip(c + s * d, c_lower, c_upper) - c, 
     #                                 num_steps, dt, M)
     
     armijo = 10**5 # initialise the difference in cost functional norm decrease
     
     
-    # while armijo > -gam / s * grad_costfun_L2 and k < max_iter:
+    # while armijo > -gam / s * control_dif_L2 and k < max_iter:
     while k < max_iter: # hard constraint: number of iterations
     
             # check if condition has been reached
-            if armijo > -gam / s * grad_costfun_L2 or armijo > 0: # not reached
+            if armijo > -gam / s * control_dif_L2 or armijo > 0: # not reached
                 print(f'{k=}')
                 s = s0*( 1/2 ** k)
                 # Calculate the incremented in c using the new step size
@@ -337,7 +344,6 @@ def armijo_line_search(var1, c, d, var1_target, num_steps, dt, M, c_lower,
                         end = (i + 1) * nodes
                         t += dt
                         wind.t = t
-                        A = assemble_sparse(dot(wind, grad(u)) * v * dx)
     
                         if i % 50 == 0:
                             print('t = ', round(t, 4))
@@ -351,8 +357,23 @@ def armijo_line_search(var1, c, d, var1_target, num_steps, dt, M, c_lower,
                         var2_n_fun = vec_to_function(var2_n, V)
                         c_np1_fun = vec_to_function(c_np1, V)
                         
+                        # # Solve for u using FCT (advection-dominated equation)
+                        # A = assemble_sparse(dot(wind, grad(u)) * v * dx)
+                        # mat_var1 = -(Du*Ad + omega1*A)
+                        # rhs_var1 = np.asarray(assemble((gamma*(c_np1_fun + var1_n_fun**2 * var2_n_fun))* v * dx))
+                        # var1[start : end] = FCT_alg(mat_var1, rhs_var1, var1_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat=gamma*M)
+    
+                        # var1_np1_fun = vec_to_function(var1[start : end], V)
+                        # M_u2 = assemble_sparse(var1_np1_fun * var1_np1_fun * u * v *dx)
+                        
+                        # # Solve for v using a direct solver
+                        # rhs_var2 = np.asarray(assemble((gamma*c_b)* v * dx))
+                        # var2[start : end] = spsolve(M + dt*(Dv*Ad + omega2*A + gamma*M_u2), M@var2_n + dt*rhs_var2) 
+                     
+                        ## v2
                         # Solve for u using FCT (advection-dominated equation)
-                        mat_var1 = -(Du*Ad + omega1*A)
+                        A = assemble_sparse(dot(wind, grad(v)) * u * dx)
+                        mat_var1 = -(Du*Ad - omega1*A)
                         rhs_var1 = np.asarray(assemble((gamma*(c_np1_fun + var1_n_fun**2 * var2_n_fun))* v * dx))
                         var1[start : end] = FCT_alg(mat_var1, rhs_var1, var1_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat=gamma*M)
     
@@ -361,12 +382,43 @@ def armijo_line_search(var1, c, d, var1_target, num_steps, dt, M, c_lower,
                         
                         # Solve for v using a direct solver
                         rhs_var2 = np.asarray(assemble((gamma*c_b)* v * dx))
-                        var2[start : end] = spsolve(M + dt*(Dv*Ad + omega2*A + gamma*M_u2), M@var2_n + dt*rhs_var2) 
+                        var2[start : end] = spsolve(M + dt*(Dv*Ad - omega2*A + gamma*M_u2), M@var2_n + dt*rhs_var2) 
                      
                         cost2 = cost_functional(var1, var1_target, c_inc, num_steps, 
                                              dt, M, beta, optim=optim, 
                                              var2 = var2, var2_target = var2_target)
                         
+                elif w is None and example == 'nonlinear':
+                    eps = 0.0001
+                    speed = 1
+                    k1 = 2
+                    k2 = 2
+                    wind = df.Expression(('speed*2*(x[1]-0.5)*x[0]*(1-x[0])',
+                              'speed*2*(x[0]-0.5)*x[1]*(1-x[1])'), degree=4, speed = speed)
+                    source_fun_expr = df.Expression('sin(k1*pi*x[0])*sin(k2*pi*x[1])', degree=4, pi=np.pi, k1=k1, k2=k2)
+                    A = assemble_sparse(dot(wind, grad(v))*u * dx)
+                    mat_var1 = -eps * Ad + A
+                    t=0
+                    var1[nodes:] = np.zeros(num_steps * nodes) # initialise uk, keep IC
+                    for i in range(1,num_steps + 1):    # solve for uk(t_{n+1})
+                        start = i * nodes
+                        end = (i + 1) * nodes
+                        t += dt
+                        if t%50==0:
+                            print('t = ', round(t, 4))
+                        
+                        var1_n = var1[start - nodes : start]
+                        var1_n_fun = vec_to_function(var1_n, V) 
+                        M_u2 = assemble_sparse(var1_n_fun * var1_n_fun * u * v *dx)
+
+                        var1_rhs = np.asarray(assemble(source_fun_expr*v*dx))
+                        
+                        var1[start:end] = FCT_alg(mat_var1, var1_rhs, var1_n, dt, nodes, M, M_Lump, 
+                                        dof_neighbors, source_mat = -M + 1/3*M_u2)
+                        
+                        cost2 = cost_functional(var1, var1_target, c_inc, num_steps, 
+                                             dt, M, beta, optim=optim)
+
                 elif w is not None: # increment in var1 is given as w
                     var1_inc = var1 + s*w # assuming one variable only
                     cost2 = cost_functional(var1_inc, var1_target, c_inc, num_steps, 
@@ -375,10 +427,10 @@ def armijo_line_search(var1, c, d, var1_target, num_steps, dt, M, c_lower,
                     raise ValueError(f"The selected combination of parameters {w=} and {example=} is invalid.")
 
                 armijo = cost2 - costfun_init
-                grad_costfun_L2 = L2_norm_sq_Q(c_inc - c, num_steps, dt, M)
+                control_dif_L2 = L2_norm_sq_Q(c_inc - c, num_steps, dt, M)
                 
                 k += 1
-                print(f'{grad_costfun_L2=}')
+                print(f'{control_dif_L2=}')
                 print(f'{armijo=}')
                 print(f'{cost2=}, {costfun_init=}')
                 
@@ -387,7 +439,7 @@ def armijo_line_search(var1, c, d, var1_target, num_steps, dt, M, c_lower,
 
     print(f'\nArmijo exit at {k=} with {s=}')
 
-    if armijo < -gam / s * grad_costfun_L2:
+    if armijo < -gam / s * control_dif_L2:
         print('Converged: Armijo condition satisfied.')
     elif k >= max_iter:
         print(f'Stopped: Maximum iterations exceeded for {max_iter=}.')
@@ -395,11 +447,12 @@ def armijo_line_search(var1, c, d, var1_target, num_steps, dt, M, c_lower,
     # if optim == 'alltime':
     #     return s
     # elif optim == 'finaltime':
-    if var2 is None:
+    if var2 is None and example is None:
         return s, var1_inc
-    else: 
+    elif example == 'nonlinear':
+        return s, var1
+    elif example == 'Schnak':
         return s, var1, var2
-
 
 # def armijo_line_search_chtxs(m, f, q, c, d, mhatvec, fhatvec, Mat_fq, chi, Dm, Df, num_steps,
 #                              dt, nodes, M, M_Lump, Ad, c_lower, c_upper, beta, V, dof_neighbors, gam = 10**-4, 
@@ -659,4 +712,4 @@ def FCT_alg(A, rhs, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat = None)
     
     ## 4. Correct u_Low^{n+1} explicitly:
     u_np1 = u_Low + dt*Fbar/M_Lump_diag
-    return u_np1 #, Mat_u_Low, D
+    return u_np1

@@ -41,11 +41,14 @@ t0 = 0
 dt = 0.001*2
 T = 0.2
 T_data = 0.2
+dt_data = 0.001
+skip = int(dt/dt_data) # note: assume dt is divisible by dt_data
 num_steps = round((T-t0)/dt)
+num_steps_data = round((T_data-t0)/dt_data)
 tol = 10**-4 # !!!
 
-example_name = f"Schnak_adv_Du{Du}_timedep_vel_coarse/Schnak_adv"
-out_folder_name = f"Schnak_adv_AT_Du{Du}_timedep_vel_T{T}_beta{beta}_tol{tol}_ckinit_zero_coarse_Nt100"
+example_name = f"Schnak_adv_Du{Du}_timedep_vel_coarse_v2/Schnak_adv"
+out_folder_name = f"Schnak_adv_AT_Du{Du}_timedep_vel_T{T}_beta{beta}_tol{tol}_ckinit_zero_coarse_Nt100_v2"
 if not Path(out_folder_name).exists():
     Path(out_folder_name).mkdir(parents=True)
 
@@ -91,7 +94,6 @@ Ad = assemble_sparse(dot(grad(u), grad(w)) * dx)
 
 ###############################################################################
 ################ Target states & initial conditions for m,f ###################
-
 ###############################################################################
 def init_conditions(X,Y):
     '''
@@ -111,8 +113,10 @@ u0_orig, v0_orig = init_conditions(X, Y)
 u0 = reorder_vector_to_dof_time(u0_orig.reshape(nodes), 1, nodes, vertextodof)
 v0 = reorder_vector_to_dof_time(v0_orig.reshape(nodes), 1, nodes, vertextodof)
 
-uhat = np.genfromtxt(example_name + f'_u.csv', delimiter=',')[:(num_steps+1)*nodes]
-vhat = np.genfromtxt(example_name + f'_v.csv', delimiter=',')[:(num_steps+1)*nodes]
+uhat = np.genfromtxt(example_name + f'_u.csv', delimiter=',')[:(num_steps_data+1)*nodes].reshape(num_steps_data+1,nodes)
+vhat = np.genfromtxt(example_name + f'_v.csv', delimiter=',')[:(num_steps_data+1)*nodes].reshape(num_steps_data+1,nodes)
+uhat = uhat[::skip].flatten()
+vhat = vhat[::skip].flatten()
 uhat_re = reorder_vector_from_dof_time(uhat, num_steps + 1, nodes, vertextodof)
 vhat_re = reorder_vector_from_dof_time(vhat, num_steps + 1, nodes, vertextodof)
 

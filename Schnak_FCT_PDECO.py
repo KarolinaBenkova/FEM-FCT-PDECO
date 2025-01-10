@@ -25,8 +25,8 @@ deltax = 0.01*2
 intervals_line = round((a2 - a1) / deltax)
 beta = 0.1
 # box constraints for c, exact solution is in [0,1]
-c_upper = 0.5
-c_lower = 0
+c_upper = 1
+c_lower = -1
 
 Du = 1/100
 Dv = 8.6676
@@ -38,13 +38,13 @@ omega2 = 0.6
 
 t0 = 0
 dt = 0.001*2
-T = 0.2
-T_data = 0.2
+T = 3*dt #0.2
+T_data = 0.2#T
 num_steps = round((T-t0)/dt)
 tol = 10**-4 #5*10**-3 # !!!
 
-example_name = f"Schnak_adv_Du{Du}_timedep_vel_coarse/Schnak_adv"
-out_folder_name = f"Schnak_adv_FT_Du{Du}_timedep_vel_T{T}_beta{beta}_tol{tol}_ckinit_0.1_cupper{c_upper}pert_coarse_Nt100_v1"
+example_name = f"Schnak_adv_Du{Du}_timedep_vel_coarse_v2/Schnak_adv"
+out_folder_name = f"Schnak_adv_FT_Du{Du}_timedep_vel_T{T}_beta{beta}_tol{tol}_ckinit_0.1_cupper{c_upper}pert_coarse_Nt100_v2"
 if not Path(out_folder_name).exists():
     Path(out_folder_name).mkdir(parents=True)
 
@@ -184,23 +184,9 @@ while stop_crit >= tol and it<1000:
         v_n_fun = vec_to_function(v_n, V)
         c_np1_fun = vec_to_function(c_np1, V)
         
-        # Solve for u using FCT (advection-dominated equation)
-        A = assemble_sparse(dot(wind, grad(u)) * w * dx)
-        mat_u = -(Du*Ad + omega1*A)
-        rhs_u = np.asarray(assemble((gamma*(c_np1_fun + u_n_fun**2 * v_n_fun))* w * dx))
-        uk[start : end] = FCT_alg(mat_u, rhs_u, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat=gamma*M)
-
-        u_np1_fun = vec_to_function(uk[start : end], V)
-        M_u2 = assemble_sparse(u_np1_fun * u_np1_fun * u * w *dx)
-        
-        # Solve for v using a direct solver
-        rhs_v = np.asarray(assemble((gamma*c_b)* w * dx))
-        vk[start : end] = spsolve(M + dt*(Dv*Ad + omega2*A + gamma*M_u2), M@v_n + dt*rhs_v) 
-        
-        # # v2: different weak formulation for advection matrix (corresponding signs also change)
         # # Solve for u using FCT (advection-dominated equation)
-        # A = assemble_sparse(dot(wind, grad(w)) * u * dx)
-        # mat_u = -(Du*Ad - omega1*A)
+        # A = assemble_sparse(dot(wind, grad(u)) * w * dx)
+        # mat_u = -(Du*Ad + omega1*A)
         # rhs_u = np.asarray(assemble((gamma*(c_np1_fun + u_n_fun**2 * v_n_fun))* w * dx))
         # uk[start : end] = FCT_alg(mat_u, rhs_u, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat=gamma*M)
 
@@ -209,7 +195,21 @@ while stop_crit >= tol and it<1000:
         
         # # Solve for v using a direct solver
         # rhs_v = np.asarray(assemble((gamma*c_b)* w * dx))
-        # vk[start : end] = spsolve(M + dt*(Dv*Ad - omega2*A + gamma*M_u2), M@v_n + dt*rhs_v) 
+        # vk[start : end] = spsolve(M + dt*(Dv*Ad + omega2*A + gamma*M_u2), M@v_n + dt*rhs_v) 
+        
+        # v2: different weak formulation for advection matrix (corresponding signs also change)
+        # Solve for u using FCT (advection-dominated equation)
+        A = assemble_sparse(dot(wind, grad(w)) * u * dx)
+        mat_u = -(Du*Ad - omega1*A)
+        rhs_u = np.asarray(assemble((gamma*(c_np1_fun + u_n_fun**2 * v_n_fun))* w * dx))
+        uk[start : end] = FCT_alg(mat_u, rhs_u, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat=gamma*M)
+
+        u_np1_fun = vec_to_function(uk[start : end], V)
+        M_u2 = assemble_sparse(u_np1_fun * u_np1_fun * u * w *dx)
+        
+        # Solve for v using a direct solver
+        rhs_v = np.asarray(assemble((gamma*c_b)* w * dx))
+        vk[start : end] = spsolve(M + dt*(Dv*Ad - omega2*A + gamma*M_u2), M@v_n + dt*rhs_v) 
             
     ###########################################################################
     ############## Solve the adjoint equations using FCT for p ################

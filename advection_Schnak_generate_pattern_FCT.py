@@ -71,7 +71,7 @@ Y = np.arange(a1, a2 + deltax, deltax)
 X, Y = np.meshgrid(X,Y)
 
 show_plots = True
-out_folder_name = f"Schnak_adv_Du{Du}_timedep_vel_coarse"
+out_folder_name = f"Schnak_adv_Du{Du}_timedep_vel_coarse_v2"
 if not Path(out_folder_name).exists():
     Path(out_folder_name).mkdir(parents=True)
     
@@ -116,7 +116,7 @@ M = assemble_sparse_lil(u * w * dx)
 M_Lump = row_lump(M,nodes)
 
 # Stiffness matrix
-K = assemble_sparse(dot(grad(u), grad(w)) * dx)
+Ad = assemble_sparse(dot(grad(u), grad(w)) * dx)
 
 # Advection matrix
 A = assemble_sparse(dot(wind, grad(u)) * w * dx)
@@ -142,9 +142,7 @@ for i in range(1, num_steps + 1):    # solve for uk(t_{n+1})
     start = i * nodes
     end = (i + 1) * nodes
     t += dt
-
     wind.t = t
-    A = assemble_sparse(dot(wind, grad(u)) * w * dx)
 
     print('t = ', round(t, 4))
     
@@ -162,20 +160,35 @@ for i in range(1, num_steps + 1):    # solve for uk(t_{n+1})
     
     ########## Replicate paper results, Fig. 3 Garzon-Alvarado'11 #############
     
-    # solve for u (smaller diffusion coef. --> make advecton-dominated)
-    mat_u = -(Du*K + omega1*A)
+    # # solve for u (smaller diffusion coef. --> make advecton-dominated)
+    # A = assemble_sparse(dot(wind, grad(u)) * w * dx)
+    # mat_u = -(Du*K + omega1*A)
+    # rhs_u = np.asarray(assemble((gamma*(c_a + u_n_fun**2 * v_n_fun))* w * dx))
+    # # uk[start : end] = spsolve(M - dt*(mat_u - gamma*M), M@u_n + dt*rhs_u)    
+    # uk[start : end] = FCT_alg(mat_u, rhs_u, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat=gamma*M)
+
+    # u_np1_fun = vec_to_function(uk[start : end], V)
+    # M_u2 = assemble_sparse(u_np1_fun * u_np1_fun * u * w *dx)
+    
+    # # solve for v
+    # mat_v = -(Dv*K + omega2*A)
+    # rhs_v = np.asarray(assemble((gamma*c_b)* w * dx))
+    # vk[start : end] = spsolve(M - dt*(mat_v-gamma*M_u2), M@v_n + dt*rhs_v)    
+    # # vk[start : end] = FCT_alg(mat_v, rhs_v, v_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat=gamma*M_u2)
+    
+    # v2: different weak formulation for advection matrix (corresponding signs also change)
+    # Solve for u using FCT (advection-dominated equation)
+    A = assemble_sparse(dot(wind, grad(w)) * u * dx)
+    mat_u = -(Du*Ad - omega1*A)
     rhs_u = np.asarray(assemble((gamma*(c_a + u_n_fun**2 * v_n_fun))* w * dx))
-    # uk[start : end] = spsolve(M - dt*(mat_u - gamma*M), M@u_n + dt*rhs_u)    
     uk[start : end] = FCT_alg(mat_u, rhs_u, u_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat=gamma*M)
 
     u_np1_fun = vec_to_function(uk[start : end], V)
     M_u2 = assemble_sparse(u_np1_fun * u_np1_fun * u * w *dx)
     
-    # solve for v
-    mat_v = -(Dv*K + omega2*A)
+    # Solve for v using a direct solver
     rhs_v = np.asarray(assemble((gamma*c_b)* w * dx))
-    vk[start : end] = spsolve(M - dt*(mat_v-gamma*M_u2), M@v_n + dt*rhs_v)    
-    # vk[start : end] = FCT_alg(mat_v, rhs_v, v_n, dt, nodes, M, M_Lump, dof_neighbors, source_mat=gamma*M_u2)
+    vk[start : end] = spsolve(M + dt*(Dv*Ad - omega2*A + gamma*M_u2), M@v_n + dt*rhs_v) 
 
     u_re = reorder_vector_from_dof_time(uk[start : end], 1, nodes, vertextodof).reshape((sqnodes,sqnodes))
     v_re = reorder_vector_from_dof_time(vk[start : end], 1, nodes, vertextodof).reshape((sqnodes,sqnodes))

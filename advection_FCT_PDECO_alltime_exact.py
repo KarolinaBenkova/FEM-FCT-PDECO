@@ -1,10 +1,6 @@
 from dolfin import *
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.sparse import diags, block_diag, vstack, hstack, csr_matrix, lil_matrix, spdiags, triu, tril
-from timeit import default_timer as timer
-from datetime import timedelta
-from scipy.integrate import simps
 import os
 from pathlib import Path
 from helpers import *

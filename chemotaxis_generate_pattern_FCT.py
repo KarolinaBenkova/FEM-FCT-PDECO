@@ -26,7 +26,7 @@ import mimura_data_helpers
 ## Define the parameters
 a1 = 0
 a2 = 10
-deltax = 0.05*2
+deltax = 0.05*2*2
 intervals_line = round((a2 - a1) / deltax)
 
 delta = 1
@@ -142,74 +142,5 @@ for i in range(1, num_steps + 1):    # solve for fk(t_{n+1}), mk(t_{n+1})
     mk.tofile(out_folder_name + f'/chtx_m.csv', sep = ',')
     fk.tofile(out_folder_name + f'/chtx_f.csv', sep = ',')
 
-    
-###############################################################################    
-# # Mapping to order the solution vectors based on vertex indices
-# mk_re = reorder_vector_from_dof_time(mk, num_steps + 1, nodes, vertextodof)
-# fk_re = reorder_vector_from_dof_time(fk, num_steps + 1, nodes, vertextodof)
-
-# min_m = np.amin(mk)
-# min_f = np.amin(fk)
-
-# max_m = np.amax(mk)
-# max_f = np.amax(fk)
-
-# for i in range(num_steps):
-#     start_st = (i+1) * nodes
-#     end_st = (i+2) * nodes
-#     t_st = (i+1) * dt
-    
-#     m_re = mk_re[start_st : end_st]
-#     f_re = fk_re[start_st : end_st]
-        
-#     m_re = m_re.reshape((sqnodes, sqnodes))
-#     f_re = f_re.reshape((sqnodes, sqnodes))
-    
-#     # # save target states:
-#     # if t_st == 14 or t_st == 30:
-#     #     print('here')
-#     #     plt.imshow(m_re, cmap='gray_r')
-#     #     plt.axis('off')
-#     #     filename = f'data/mimura_tsujikawa_t' + str(t_st) + '_m.png'
-#     #     plt.savefig(filename)
-#     #     plt.close()
-        
-#     #     plt.imshow(f_re, cmap='gray_r')
-#     #     plt.axis('off')
-#     #     filename = f'data/mimura_tsujikawa_t' + str(t_st) + '_f.png'
-#     #     plt.savefig(filename)
-#     #     plt.close()
-        
-#     #     m_dof = mk[start_st : end_st]
-#     #     f_dof = fk[start_st : end_st]
-
-#     #     # m_dof.tofile('data/mimura_tsujikawa_t' + str(t_st) + '_m.csv', sep = ',')
-#     #     # f_dof.tofile('data/mimura_tsujikawa_t' + str(t_st) + '_f.csv', sep = ',')
-        
-#     #     print('At t=', t_st)
-#     #     print(f'm, from {np.amin(m_re)} to {np.amax(m_re)}')
-#     #     print(f'f, from {np.amin(f_re)} to {np.amax(f_re)}')
-
-    
-#     if show_plots is True and i % 20 == 0:
-#         fig2 = plt.figure(figsize = (10, 5))
-#         fig2.tight_layout(pad = 3.0)
-#         ax2 = plt.subplot(1,2,1)
-#         im1 = plt.imshow(m_re, vmin = min_m, vmax = max_m, cmap='gray_r')
-#         fig2.colorbar(im1)
-#         plt.title(f'Computed state $m$ at t = {round(t_st,5)}')
-#         ax2 = plt.subplot(1,2,2)
-#         im2 = plt.imshow(f_re, vmin = min_f, vmax = max_f, cmap='gray_r')
-#         fig2.colorbar(im2)
-#         plt.title(f'Computed state $f$ at t = {round(t_st,5)}')
-#         plt.show()
-#         # filename = f'mimura_FCT_state/plot_{i:03}.png'  # e.g., plot_001.png, plot_002.png, etc.
-#         # plt.savefig(filename)
-#         # plt.close()
-        
-        
-    # print('------------------------------------------------------')
 
 print(f'{T=}, {dt=}, {deltax=}, {chi=}, {Dm=}, {Df=}')
-mk.tofile(out_folder_name + f'/chtx_m.csv', sep = ',')
-fk.tofile(out_folder_name + f'/chtx_f.csv', sep = ',')
