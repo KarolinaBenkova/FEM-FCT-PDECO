@@ -75,7 +75,6 @@ Ad = assemble_sparse(dot(grad(u), grad(v)) * dx)
 # System matrix: equation for f
 Mat_f = M + dt * (Df * Ad + delta * M)
 
-zeros = np.zeros(nodes)
 ###############################################################################
 ######################## Initial conditions for m,f ###########################
 ###############################################################################
