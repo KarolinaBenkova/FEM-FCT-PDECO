@@ -370,13 +370,13 @@ pk.tofile(out_folder_name + f'/Schnak_adv_T{T}_beta{beta}_p.csv', sep = ',')
 print(f'Exit:\n Stop. crit.: {stop_crit}\n Iterations: {it}\n dx={deltax}')
 print(f'{dt=}, {T=}, {beta=}')
 print('Solutions saved to the folder:', out_folder_name)
-print('L2_\Omega^2 (u(T) - uhat_T)=', L2_norm_sq_Omega(uk[num_steps*nodes]-uhat_T,M))
+print('L2_\Omega^2 (u(T) - uhat_T)=', L2_norm_sq_Omega(uk[num_steps*nodes:]-uhat_T,M))
 
 # print('Max. of the control at final time step:', np.amax(ck[num_steps*nodes:]))
 # print('Min. of the control at final time step:', np.amin(ck[num_steps*nodes:]))
 # print('Mean of the control at final time step:', np.mean(ck[num_steps*nodes:]))
 
-eval_sim = 1/T * 1/((a2-a1)**2) * L2_norm_sq_Omega(ck, M)
+eval_sim = 1/T * 1/((a2-a1)**2) * L2_norm_sq_Omega(ck[num_steps*nodes:], M)
 print(f'{eval_sim=}')
 
 simulation_duration = end_time - start_time
@@ -407,4 +407,4 @@ with open(csv_file_path, mode='a', newline='') as csv_file:
         writer.writeheader()
     
     # Write the data
-    writer.writerow(data)R
+    writer.writerow(data)
