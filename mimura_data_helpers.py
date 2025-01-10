@@ -43,7 +43,7 @@ def m_initial_condition(a1, a2, deltax):
     
     ## painter ptashnyk headon 2021 
     n = X.shape[0]
-    con = 0.1
+    # con = 0.1
     # m0_array = np.ones((n,n)) + 0.5*(np.random.rand(n,n)-0.5*np.ones((n,n)))
     # m0_array = np.ones((n,n)) + con * np.cos(2 * np.pi * (X + Y)) + \
     # 0.01 * (sum(np.cos(2 * np.pi * X * i) for i in range(1, 9)))
@@ -53,11 +53,13 @@ def m_initial_condition(a1, a2, deltax):
     
     # simplified feathers model
     np.random.seed(5)
-    k = 20
-    # m0_array = 1.5 + 0.6*(0.5 - np.random.rand(n,n)) 
-    m0_array = 1.5*np.ones((n,n)) + con * np.cos(2 * np.pi / k * (X + Y)) + \
-    0.01 * (sum(np.cos(2 * np.pi / k * X * i) for i in range(1, 9)))
+    # k = 20
+    # # m0_array = 1.5 + 0.6*(0.5 - np.random.rand(n,n)) 
+    # m0_array = 1.5*np.ones((n,n)) + con * np.cos(2 * np.pi / k * (X + Y)) + \
+    # 0.01 * (sum(np.cos(2 * np.pi / k * X * i) for i in range(1, 9)))
     
+    m0_array = 1.5 + 0.1*(0.5 - np.random.rand(n,n))
+
     return m0_array
 
 def rhs_chtx_m(m_fun, v):

@@ -25,19 +25,19 @@ import mimura_data_helpers
 
 ## Define the parameters
 a1 = 0
-a2 = 10
-deltax = 0.05*2*2
+a2 = 1
+deltax = 0.005
 intervals_line = round((a2 - a1) / deltax)
 
-delta = 1
+delta = 100
 Dm = 0.05
 Df = 0.05
-chi = 5 #0.17
-gamma = 0.5#2
+chi = 0.25
+gamma = 100
 
 t0 = 0
 dt = 0.1
-T = 50 #5*dt #50
+T = 30
 num_steps = round((T-t0)/dt)
 
 # Initialize a square mesh
@@ -56,7 +56,7 @@ mesh.init(0, 1)
 dof_neighbors = find_node_neighbours(mesh, nodes, vertextodof)
 
 show_plots = True
-out_folder_name = f"chtx_chi{chi}_simplfeathers_dx{deltax}_cos"
+out_folder_name = f"chtx_chi{chi}_simplfeathers_dx{deltax}_Jan"
 if not Path(out_folder_name).exists():
     Path(out_folder_name).mkdir(parents=True)
 
@@ -90,14 +90,21 @@ f0 = reorder_vector_to_dof_time(f0_orig, 1, nodes, vertextodof)
 ########################### Initial guesses for GD ############################
 ###############################################################################
 
-vec_length = (num_steps + 1) * nodes # include zero and final time
-zeros_nt = np.zeros(vec_length)
+# vec_length = (num_steps + 1) * nodes # include zero and final time
+# zeros_nt = np.zeros(vec_length)
 
-mk = np.zeros(vec_length)
-fk = np.zeros(vec_length)
+# mk = np.zeros(vec_length)
+# fk = np.zeros(vec_length)
 
-mk[:nodes] = m0
-fk[:nodes] = f0
+# mk[:nodes] = m0
+# fk[:nodes] = f0
+
+# Change to have smaller vectors of length nodes, save them at each time step?
+m_prev = m0
+f_prev = f0
+
+m_new = np.zeros(nodes)
+f_new = np.zeros(nodes)
 
 t = 0
 for i in range(1, num_steps + 1):    # solve for fk(t_{n+1}), mk(t_{n+1})
@@ -107,26 +114,36 @@ for i in range(1, num_steps + 1):    # solve for fk(t_{n+1}), mk(t_{n+1})
     if i % 50 == 0:
         print('t = ', round(t, 4))
         
-    m_n = mk[start - nodes : start]    # mk(t_n) 
-    m_n_fun = vec_to_function(m_n,V)
-    f_n_fun = vec_to_function(fk[start - nodes : start],V)
+    # m_n = mk[start - nodes : start]    # mk(t_n) 
+    # m_n_fun = vec_to_function(m_n,V)
+    # f_n_fun = vec_to_function(fk[start - nodes : start],V)
+    
+    m_n = m_prev # mk(t_n) 
+    m_n_fun = vec_to_function(m_n, V)
+    f_n_fun = vec_to_function(f_prev, V)
     
     f_rhs = np.asarray(assemble(f_n_fun * v * dx  + dt * gamma * m_n_fun * v * dx))
 
-    fk[start : end] = spsolve(Mat_f, f_rhs)
+    # fk[start : end] = spsolve(Mat_f, f_rhs)
+    f_new = spsolve(Mat_f, f_rhs)
     
-    f_np1_fun = vec_to_function(fk[start : end], V)
+    f_np1_fun = vec_to_function(f_new, V)
 
     A_m = mimura_data_helpers.mat_chtx_m(f_np1_fun, m_n_fun, Dm, chi, u, v)
     m_rhs = np.zeros(nodes)
     
-    mk[start : end] = FCT_alg(A_m, m_rhs, m_n, dt, nodes, M, M_Lump, dof_neighbors)    
+    # mk[start : end] = FCT_alg(A_m, m_rhs, m_n, dt, nodes, M, M_Lump, dof_neighbors)    
     # mk[start : end] =  spsolve(M - dt*A_m, M@m_n + dt*m_rhs)
     
-    m_re = reorder_vector_from_dof_time(mk[start : end], 1, nodes, vertextodof)
-    f_re = reorder_vector_from_dof_time(fk[start : end], 1, nodes, vertextodof)
+    m_new = FCT_alg(A_m, m_rhs, m_prev, dt, nodes, M, M_Lump, dof_neighbors)    
 
-    if show_plots is True and i % 5 == 0:
+    # m_re = reorder_vector_from_dof_time(mk[start : end], 1, nodes, vertextodof)
+    # f_re = reorder_vector_from_dof_time(fk[start : end], 1, nodes, vertextodof)
+    
+    m_re = reorder_vector_from_dof_time(m_new, 1, nodes, vertextodof)
+    f_re = reorder_vector_from_dof_time(f_new, 1, nodes, vertextodof)
+
+    if show_plots is True and i % 10 == 0:
         fig2 = plt.figure(figsize = (10, 5))
         fig2.tight_layout(pad = 3.0)
         ax2 = plt.subplot(1,2,1)
@@ -139,8 +156,12 @@ for i in range(1, num_steps + 1):    # solve for fk(t_{n+1}), mk(t_{n+1})
         plt.title(f'Computed state $f$ at t = {round(t,5)}')
         plt.show()
         
-    mk.tofile(out_folder_name + f'/chtx_m.csv', sep = ',')
-    fk.tofile(out_folder_name + f'/chtx_f.csv', sep = ',')
+    # mk.tofile(out_folder_name + f'/chtx_m.csv', sep = ',')
+    # fk.tofile(out_folder_name + f'/chtx_f.csv', sep = ',')
+    m_new.tofile(out_folder_name + f'/chtx_m_t{round(t,4)}.csv', sep = ',')
+    f_new.tofile(out_folder_name + f'/chtx_f.csv', sep = ',')
 
+    m_prev = m_new
+    f_prev = f_new
 
 print(f'{T=}, {dt=}, {deltax=}, {chi=}, {Dm=}, {Df=}')
