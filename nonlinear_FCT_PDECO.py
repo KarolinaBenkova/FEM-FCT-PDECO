@@ -41,8 +41,8 @@ deltax = 0.1/2/2
 intervals_line = round((a2-a1)/deltax)
 beta = 0.1
 # box constraints for c, exact solution is in [0,1]
-c_upper = 1 #0.5
 c_lower = -1 #0
+c_upper = 1 #0.5
 # diffusion coefficient
 eps = 0.0001
 # speed of wind
@@ -51,7 +51,7 @@ speed = 1
 t0 = 0
 dt = 0.001
 T = 1
-T_data = T
+T_data = 2
 num_steps = round((T-t0)/dt)
 tol = 10**-4 # !!!
 
@@ -60,8 +60,7 @@ k2 = 2
 
 show_plots = True
 example_name = f"nonlinear_stripes_source_control_coarse/advection_t"
-# out_folder_name = f"nonlinear_FT_eps{eps}_T{T}_beta{beta}_tol{tol}_coarse_origcontrolbounds"
-out_folder_name = f"NL_FT_T{T}_beta{beta}_Ca{c_upper}_Cb{c_lower}_tol{tol}"
+out_folder_name = f"NL_FT_T{T}_Tdata{T_data}beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}"
 if not Path(out_folder_name).exists():
     Path(out_folder_name).mkdir(parents=True)
 
@@ -113,8 +112,6 @@ A_u = A - eps * Ad
 ## System matrix for the adjoint equation (opposite sign of transport matrix)
 A_p = - A - eps * Ad
 
-zeros = np.zeros(nodes)
-
 ###############################################################################
 ################ Target states & initial conditions for m,f ###################
 ###############################################################################
@@ -131,7 +128,6 @@ def u_init(X,Y):
 u0_orig = u_init(X, Y)
 u0 = reorder_vector_to_dof_time(u0_orig.reshape(nodes), 1, nodes, vertextodof)
 
-# uhat_T = np.zeros(nodes)
 uhat_T = np.genfromtxt(example_name + f'_uT{T_data:03}.csv', delimiter=',')
 uhat_T_re = reorder_vector_from_dof_time(uhat_T, 1, nodes, vertextodof).reshape((sqnodes,sqnodes))
 
@@ -158,6 +154,11 @@ cost_fidelity_vals_u = []
 cost_control_vals = []
 mean_control_vals = []
 stop_crit = 5
+fail_count = 0
+fail_restart_count = 0
+fail_pass = False
+max_iter_armijo = 5
+max_iter_GD = 50
 
 print(f'dx={deltax}, {dt=}, {T=}, {beta=}')
 print('Starting projected gradient descent method...')
@@ -165,7 +166,8 @@ print('Starting projected gradient descent method...')
 # Record the start time of the simulation
 start_time = time.time()
 
-while (stop_crit >= tol ) and it<1000:
+# while (stop_crit >= tol ) and it < max_iter_GD:
+while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     it += 1
     print(f'\n{it=}')
         
@@ -186,12 +188,11 @@ while (stop_crit >= tol ) and it<1000:
             print('t = ', round(t, 4))
         
         uk_n = uk[start - nodes : start] # uk(t_n), i.e. previous time step at k-th GD iteration
-        uk_n_fun = vec_to_function(uk[start : end], V)
-
+        uk_n_fun = vec_to_function(uk_n, V)
         ck_np1_fun = vec_to_function(ck[start : end], V)
         
-        M_u2 = assemble_sparse(uk_n_fun * uk_n_fun * u * v *dx)
-        u_rhs = np.asarray(assemble((ck_np1_fun) * v * dx))
+        M_u2 = assemble_sparse(uk_n_fun**2 * u * v *dx)
+        u_rhs = np.asarray(assemble(ck_np1_fun * v * dx))
         uk[start:end] = FCT_alg(A_u, u_rhs, uk_n, dt, nodes, M, M_Lump, dof_neighbors,
                                 source_mat = -M + 1/3*M_u2)
         
@@ -228,10 +229,45 @@ while (stop_crit >= tol ) and it<1000:
     ###########################################################################
     
     print('Starting Armijo line search...')
-    sk, u_inc = armijo_line_search(uk, ck, dk, uhat_T, num_steps, dt, M, 
-                       c_lower, c_upper, beta, cost_fun_k, nodes,  V = V,
-                       optim = 'finaltime', dof_neighbors= dof_neighbors,
-                       example = 'nonlinear')
+    # sk, u_inc, iters = armijo_line_search(uk, ck, dk, uhat_T, num_steps, dt, M, 
+    #                    c_lower, c_upper, beta, cost_fun_k, nodes,  V = V,
+    #                    optim = 'finaltime', dof_neighbors= dof_neighbors,
+    #                    example = 'nonlinear', max_iter = max_iter_armijo)
+    
+    sk, u_inc, iters = armijo_line_search_ref(uk, ck, dk, uhat_T, num_steps, dt, 
+                       c_lower, c_upper, beta, cost_fun_k, nodes, 'finaltime', 
+                       V, dof_neighbors, example='nonlinear', max_iter=max_iter_armijo)
+    
+    if iters == max_iter_armijo:
+        # if fail_count == 0:
+        #     # save the current solution as the last best solution 
+        #     # i.e. uk, pk with the control last updated in the previous iteration
+        #     u_backup = uk
+        #     p_backup = pk
+        #     c_backup = ck
+        #     it_backup = it
+        fail_count += 1
+        fail_pass = True
+    elif iters < max_iter_armijo:
+        # if armijo converged, reset the counter
+        fail_count = 0
+        fail_restart_count += 1
+        # save the current solution as the last best solution 
+        # i.e. uk, pk with the control last updated in the previous iteration
+        u_backup = uk
+        p_backup = pk
+        c_backup = ck
+        it_backup = it
+        
+    if fail_count == 3:
+        # end while loop, assume we have found the most optimal solution
+        print("Maximum number of failed Armijo line search iterations reached. Exiting...")
+        break
+    
+    if fail_restart_count == 5:
+        # end while loop, assume we have found the most optimal solution
+        print("Maximum number of restarts reached. Exiting...")
+        break
      
     ###########################################################################
     ## 5. Calculate new control and project onto admissible set
@@ -358,7 +394,13 @@ while (stop_crit >= tol ) and it<1000:
 # Record the end time of the simulation
 end_time = time.time()
 
-# # Mapping to order the solution vectors based on vertex indices
+if fail_count == 3  or fail_restart_count == 5 or (it == max_iter_GD and fail_count > 0):
+    print(f'Restoring the solutions from iteration {it_backup}')
+    uk = u_backup
+    pk = p_backup
+    ck = c_backup
+    
+# Mapping to order the solution vectors based on vertex indices
 uk_re = reorder_vector_from_dof_time(uk, num_steps + 1, nodes, vertextodof)
 ck_re = reorder_vector_from_dof_time(ck, num_steps + 1, nodes, vertextodof)
 pk_re = reorder_vector_from_dof_time(pk, num_steps + 1, nodes, vertextodof)
@@ -372,11 +414,8 @@ print(f'{dt=}, {T=}, {beta=}')
 print('Solutions saved to the folder:', out_folder_name)
 print('L2_\Omega^2 (u(T) - uhat_T)=', L2_norm_sq_Omega(uk[num_steps*nodes:]-uhat_T,M))
 
-# print('Max. of the control at final time step:', np.amax(ck[num_steps*nodes:]))
-# print('Min. of the control at final time step:', np.amin(ck[num_steps*nodes:]))
-# print('Mean of the control at final time step:', np.mean(ck[num_steps*nodes:]))
+eval_sim = 1/T * 1/((a2-a1)**2) * L2_norm_sq_Q(ck, num_steps, dt, M)
 
-eval_sim = 1/T * 1/((a2-a1)**2) * L2_norm_sq_Omega(ck[num_steps*nodes:], M)
 print(f'{eval_sim=}')
 
 simulation_duration = end_time - start_time
