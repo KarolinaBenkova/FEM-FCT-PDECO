@@ -178,28 +178,35 @@ def artificial_diffusion_mat(mat):
     Constructs an artificial diffusion matrix to stabilize numerical schemes.
     
     Parameters:
-    mat (scipy.sparse.spmatrix): Input flux matrix, taken from the RHS of the equation.
+    mat (scipy.sparse.lil_matrix): Input flux matrix, taken from the RHS of the equation.
     
     Returns:
-    scipy.sparse.spmatrix: Artificial diffusion matrix that cancels the negative 
+    scipy.sparse.lil_matrix: Artificial diffusion matrix that cancels the negative 
         off-diagonal coefficients of mat.
     """
     # Flip the sign of upper and lower part of mat, ignoring the diagonal
-    neg_upper = -triu(mat, k=1, format='csr')  
-    neg_lower = -tril(mat, k=-1, format='csr')
-    
+    neg_upper = triu(mat, k=1, format='lil')  
+    neg_lower = tril(mat, k=-1, format='lil')
+    neg_upper[:,:] = -neg_upper[:,:]
+    neg_lower[:,:] = -neg_lower[:,:]
+
     # Only keep the entries that were originally negative
-    D_upper = neg_upper.maximum(0) 
-    D_lower = neg_lower.maximum(0)
-    
+    D_upper = lil_matrix(mat.shape)
+    D_lower = lil_matrix(mat.shape)
+
+    D_upper[:,:] = neg_upper.maximum(0)[:,:]
+    D_lower[:,:] = neg_lower.maximum(0)[:,:]
+
     # Form D by adding lower and upper parts together
-    D = D_upper + D_lower
-    
+    D = lil_matrix(mat.shape)
+    D[:, :] = D_upper[:, :] + D_lower[:, :]
+
     # Ensure D is symmetric
-    D = D.maximum(D.transpose())
-    
+    D[:,:] = D.maximum(D.transpose())[:,:]
+
     # Set the diagonal entries to negative row sums
     D.setdiag(-D.sum(axis=1)) 
+
     return D
 
 def generate_boundary_nodes(nodes, vertextodof):
@@ -337,13 +344,13 @@ def cost_functional(var1, var1_target, projected_control, num_steps,
     """
     # Calculate data fidelity norms
     if optim == 'alltime':
-        print('calculating L^2(Q)-norm')
+        print('Calculating L^2(Q)-norm...')
         func = 0.5 * L2_norm_sq_Q(var1 - var1_target, num_steps, dt, M)
         if var2 is not None and var2_target is not None:
             func += 0.5 * L2_norm_sq_Q(var2 - var2_target, num_steps, dt, M)
             
     elif optim == 'finaltime':
-        print('calculating L^2(\Omega)-norm')
+        print('Calculating L^2(\Omega)-norm...')
         nodes = var1_target.shape[0]
         func = 0.5 * L2_norm_sq_Omega(var1[num_steps * nodes:] - var1_target, M)
         
@@ -558,13 +565,312 @@ def armijo_line_search(var1, c, d, var1_target, num_steps, dt, M, c_lower,
         return s, var1, var2
     elif example == 'chtxs':
         return s, var1, var2
+
+def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbors):
+    """
+    Solver for the advective Schnakenberg system
+        du/dt - Du*grad^2(u) + om1*w⋅grad(u) + gamma*(u-u^2v) = gamma*c  in Ωx[0,T]
+        dv/dt - Dv*grad^2(v) + om2*w⋅grad(v) + gamma*(u^2v-b) = 0        in Ωx[0,T]
+                                                du/dn = dv/dn = 0        on ∂Ωx[0,T]
+                                                         u(0) = u0(x)    in Ω
+                                                         v(0) = v0(x)    in Ω
+
+    Parameters:
+        c (np.ndarray): Control variable.
+        var1 (np.ndarray): The state variable influenced by the control variable.
+        var2 (np.ndarray): The second state variable.
+        V (FunctionSpace, optional): Finite element function space.
+        nodes (int): Number of nodes in the spatial discretization.
+        num_steps (int): Number of time steps.
+        dt (float): Time step size.
+        dof_neighbors (list): Degrees of freedom neighbors for FCT.
+
+    Returns:
+        tuple: Solutions for the state variables var1 and var2.
+    """
+    Du = 1/10
+    Dv = 8.6676
+    c_b = 0.9
+    gamma = 230.82
+    omega1 = 100
+    omega2 = 0.6
+    wind = df.Expression(('-(x[1]-0.5)*sin(2*pi*t)','(x[0]-0.5)*sin(2*pi*t)'), degree=4, pi=np.pi, t=0)
+
+    u = df.TrialFunction(V)
+    v = df.TestFunction(V)
+    M = assemble_sparse(u * v * dx)
+    M_lumped = row_lump(M, nodes)
+    Ad = assemble_sparse(dot(grad(u), grad(v)) * dx)
     
+    # Reset variables but keep initial conditions
+    var1[nodes :] = np.zeros(num_steps * nodes)
+    var2[nodes :] = np.zeros(num_steps * nodes)
+    t = 0
+    print('Solving the system of advective Schnakenberg state equations...')
+    for i in range(1, num_steps + 1):   # Solve for var1(t_{n+1}), var2(t_{n+1})
+        start = i * nodes
+        end = (i + 1) * nodes
+        t += dt
+        wind.t = t
+
+        if i % 50 == 0:
+            print('t = ', round(t, 4))
+        
+        var1_n = var1[start - nodes : start]
+        var2_n = var2[start - nodes : start]
+        
+        # Define previous time-step solution as a function
+        var1_n_fun = vec_to_function(var1_n, V)
+        var2_n_fun = vec_to_function(var2_n, V)
+        control_fun = vec_to_function(control[start : end], V)
+        
+        # Solve for u using FCT (advection-dominated equation)
+        A = assemble_sparse(dot(wind, grad(v)) * u * dx)
+        mat_var1 = -(Du*Ad - omega1*A)
+        rhs_var1 = np.asarray(assemble((gamma*(control_fun + var1_n_fun**2 * var2_n_fun))* v * dx))
+        var1[start : end] = FCT_alg(mat_var1, rhs_var1, var1_n, dt, nodes, M, M_lumped, dof_neighbors, source_mat=gamma*M)
+
+        var1_np1_fun = vec_to_function(var1[start : end], V)
+        M_u2 = assemble_sparse(var1_np1_fun * var1_np1_fun * u * v *dx)
+        
+        # Solve for v using a direct solver
+        rhs_var2 = np.asarray(assemble((gamma*c_b)* v * dx))
+        var2[start : end] = spsolve(M + dt*(Dv*Ad - omega2*A + gamma*M_u2), M@var2_n + dt*rhs_var2) 
+     
+    return var1, var2
+
+def nonlinear_equation_IC(a1, a2, deltax, nodes, vertextodof):
+    """
+    Computes the initial condition for a nonlinear equation on a 2D square mesh grid.
+
+    Parameters:
+        a1 (float): Left endpoint of the spatial domain [a1,a2]x[a1,a2].
+        a2 (float): Right endpoint of the spatial domain [a1,a2]x[a1,a2].
+        deltax (float): Grid spacing in both X and Y directions.
+
+    Returns:
+        np.ndarray: 2D array representing the initial condition over the mesh grid.
+    """
+    X = np.arange(a1, a2 + deltax, deltax)
+    Y = np.arange(a1, a2 + deltax, deltax)
+    X, Y = np.meshgrid(X,Y)
+    
+    kk = 4
+    init_cond = 5*Y*(Y-1)*X*(X-1)*np.sin(kk*X*np.pi)
+    init_cond_dof = reorder_vector_to_dof_time(init_cond.reshape(nodes), 1, nodes, vertextodof)
+
+    return init_cond_dof
+
+def get_nonlinear_eqns_params():
+    """
+    Returns the shared parameters for the nonlinear state and adjoint equations:
+        du/dt + div(-eps*grad(u) + w*u) - u + 1/3*u^3 = c   in Ωx[0,T]
+        dp/dt + div(-eps*grad(p) + w*p) + u^2*p - p = 0     in Ω × [0,T]
+    """
+    eps = 0.0001
+    speed = 1
+    k1 = 2
+    k2 = 2
+    wind = df.Expression(
+        ('speed*2*(x[1]-0.5)*x[0]*(1-x[0])',
+         'speed*2*(x[0]-0.5)*x[1]*(1-x[1])'),
+        degree=4, speed=speed
+    )
+    return eps, speed, k1, k2, wind
+
+def solve_nonlinear_equation(control, var1, var2, V, nodes, num_steps, dt, dof_neighbors):
+    """
+    Solver for the nonlinear equation:
+        du/dt + div(-eps*grad(u) + w*u) - u + 1/3*u^3 = c      in Ωx[0,T]
+                                                du/dn = 0      on ∂Ωx[0,T]
+                                                 u(0) = u0(x)  in Ω
+    where div (w) = 0  in Ωx[0,T]
+          w⋅n = 0      on ∂Ωx[0,T]                                             
+          
+    Parameters:
+        c (np.ndarray): Control variable.
+        var1 (np.ndarray): The state variable influenced by the control variable.
+        var2 (np.ndarray): Placeholder for a second state variable.
+        V (FunctionSpace, optional): Finite element function space.
+        nodes (int): Number of nodes in the spatial discretization.
+        num_steps (int): Number of time steps.
+        dt (float): Time step size.
+        dof_neighbors (list): Degrees of freedom neighbors for FCT.
+
+    Returns:
+        tuple: Solution for the state variable var1 and None for compatibility 
+            with usage in armijo_line_search that requires a tuple.
+    """
+    
+    eps, speed, k1, k2, wind = get_nonlinear_eqns_params()
+    # source_fun_expr = df.Expression('sin(k1*pi*x[0])*sin(k2*pi*x[1])', degree=4, pi=np.pi, k1=k1, k2=k2)
+    u = df.TrialFunction(V)
+    v = df.TestFunction(V)
+    M = assemble_sparse(u*v*dx)
+    M_lil = assemble_sparse_lil(u*v*dx)
+    M_lumped = row_lump(M, nodes)
+    Mat_var1 = assemble_sparse_lil((-eps*dot(grad(u), grad(v)) + dot(wind, grad(v))*u)* dx)
+
+    # Reset variable but keep initial conditions
+    var1[nodes:] = np.zeros(num_steps * nodes)
+    t = 0
+    print('Solving nonlinear state equation...')
+    for i in range(1,num_steps + 1):           # Solve for var1(t_{n+1})
+        start = i * nodes
+        end = (i + 1) * nodes
+        t += dt
+        if t % 50 == 0:
+            print('t = ', round(t, 4))
+
+        var1_n = var1[start - nodes : start]
+        var1_n_fun = vec_to_function(var1_n, V) 
+        control_fun = vec_to_function(control[start : end], V)
+
+        # M_u2 = assemble_sparse_lil(var1_n_fun**2 * u * v *dx)
+        Mat_on_rhs = assemble_sparse_lil((-1*u + 1/3*var1_n_fun**2 * u) * v *dx) # -M + 1/3*M_u2
+        var1_rhs = np.asarray(assemble(control_fun * v *dx))
+        print('before FCT')
+        var1[start:end] = FCT_alg(Mat_var1, var1_rhs, var1_n, dt, nodes, M_lil, M_lumped, 
+                        dof_neighbors, source_mat = Mat_on_rhs)
+
+    return var1, None
+
+def solve_adjoint_nonlinear_equation(uk, uhat_T, pk, T, V, nodes, num_steps, dt, dof_neighbors):
+    """
+    Solves the adjoint equation:
+        dp/dt + div(-eps*grad(p) + w*p) + u^2*p - p =  0   in Ω × [0,T]
+                                               dp/dn = 0         on ∂Ω × [0,T]
+                                                p(T) = uhat - u         in Ω
+    corresponding to the nonlinear state equation:
+        du/dt + div(-eps*grad(u) + w*u) - u + (1/3) * u^3 = c    in Ω × [0,T]
+                                                   du/dn = 0    on ∂Ω × [0,T]
+                                                    u(0) = u0(x) in Ω
+    where the velocity field satisfies:
+        div(w) = 0   in Ω × [0,T]
+           w⋅n = 0    on ∂Ω × [0,T]
+
+    Parameters:
+        uk (np.ndarray): The state variable influenced by the control variable.
+        uhat_T (np.ndarray): The desired target state at the final time T.
+        pk (np.ndarray): The adjoint variable, initialized at final time T.
+        T (float): Final time of the simulation.
+        V (FunctionSpace): Finite element function space.
+        nodes (int): Number of spatial nodes in the discretization.
+        num_steps (int): Number of time steps.
+        dt (float): Time step size.
+        dof_neighbors (list): Degrees of freedom neighbors for FCT.
+
+    Returns:
+        np.ndarray: The computed adjoint variable pk at all time steps.
+    """
+    
+    eps, speed, k1, k2, wind = get_nonlinear_eqns_params()
+    # source_fun_expr = df.Expression('sin(k1*pi*x[0])*sin(k2*pi*x[1])', degree=4, pi=np.pi, k1=k1, k2=k2)
+    
+    u = df.TrialFunction(V)
+    v = df.TestFunction(V)
+    M = assemble_sparse(u*v*dx)
+    M_lil = assemble_sparse_lil(u*v*dx)
+    M_lumped = row_lump(M, nodes)
+    Ad = assemble_sparse(dot(grad(u), grad(v)) * dx)
+    A = assemble_sparse(dot(wind, grad(v))*u * dx)
+    Mat_p = - A - eps * Ad
+
+    # Reset variable but keep initial conditions
+    pk[num_steps * nodes :] = uhat_T - uk[num_steps * nodes :]
+    t = T
+    print('Solving adjoint equation...')
+    for i in reversed(range(0, num_steps)):
+        start = i * nodes
+        end = (i + 1) * nodes
+        t -= dt
+        if i % 50 == 0:
+            print('t = ', round(t, 4))
+            
+        pk_np1 = pk[end : end + nodes]                  # pk(t_{n+1})
+        uk_n_fun = vec_to_function(uk[start : end], V)  # uk(t_n)
+        M_u2 = assemble_sparse(uk_n_fun**2 * u * v *dx)
+
+        p_rhs = np.zeros(nodes)
+        pk[start:end] = FCT_alg(Mat_p, p_rhs, pk_np1, dt, nodes, M_lil, M_lumped, 
+                                dof_neighbors, source_mat = M_u2 - M)
+    return pk
+
+def solve_chtxs_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbors):
+    """
+    Solver for the chemotaxis system
+    du/dt - Du*grad^2(u) + om1*w⋅grad(u) + gamma*(u-u^2v) = gamma*c  in Ω
+    dv/dt - Dv*grad^2(v) + om2*w⋅grad(v) + gamma*(u^2v-b) = 0        in Ω
+    dm/dt - Dm*grad^2(m) + div(chi*m*grad(f)) = RHS       in Ωx[0,T]
+    df/dt - Df*grad^2(f)) + delta*f = c*m          in Ωx[0,T]
+                                            du/dn = dv/dn = 0        on ∂Ωx[0,T]
+                                                     u(0) = u0(x)    in Ω
+                                                     v(0) = v0(x)    in Ω
+
+    Parameters:
+        c (np.ndarray): Control variable.
+        var1 (np.ndarray): The state variable u.
+        var2 (np.ndarray): The second state variable, v, influenced by the control variable.
+        V (FunctionSpace, optional): Finite element function space.
+        nodes (int): Number of nodes in the spatial discretization.
+        num_steps (int): Number of time steps.
+        dt (float): Time step size.
+        dof_neighbors (list): Degrees of freedom neighbors for FCT.
+
+    Returns:
+        tuple: Solutions for the state variables var1 and var2.
+    """
+    delta = 100
+    Dm = 0.05
+    Df = 0.05
+    chi = 0.25
+    gamma = 100
+    
+    u = df.TrialFunction(V)
+    v = df.TestFunction(V)
+    M = assemble_sparse(u*v*dx)
+    M_lil = assemble_sparse_lil(u*v*dx)
+    M_lumped = row_lump(M, nodes)
+    Ad = assemble_sparse(dot(grad(u), grad(v)) * dx)
+    Mat_var2 = M + dt * (Df * Ad + delta * M)
+
+    # Reset variables but keep initial conditions
+    var1[nodes :] = np.zeros(num_steps * nodes)
+    var2[nodes :] = np.zeros(num_steps * nodes)
+    t = 0
+    print('Solving the system of chemotaxis state equations...')
+    for i in range(1, num_steps + 1):  # Solve for var2(t_{n+1}), var1(t_{n+1})
+        start = i * nodes
+        end = (i + 1) * nodes
+        t += dt
+        if i % 50 == 0:
+            print('t = ', round(t, 4))
+                
+        var1_n = var1[start - nodes : start]
+        var1_n_fun = vec_to_function(var1_n, V)
+        var2_n_fun = vec_to_function(var2[start - nodes : start], V)
+        control_fun = vec_to_function(control[start : end], V)
+           
+        var2_rhs = np.asarray(assemble(var2_n_fun * v * dx  + dt * control_fun * var1_n_fun * v * dx))
+    
+        var2[start : end] = spsolve(Mat_var2, var2_rhs)
+            
+        var2_np1_fun = vec_to_function(var2[start : end], V)
+    
+        beta = 0.5
+        Aa = assemble_sparse(exp(-beta*var1_n_fun)*dot(grad(var2_np1_fun), grad(v)) * u * dx)
+        A_var1 = - Dm * Ad + chi*Aa
+        var1_rhs = np.zeros(nodes)
+    
+        var1[start : end] =  FCT_alg(A_var1, var1_rhs, var1_n, dt, nodes, M_lil, M_lumped, dof_neighbors)
+    
+    return var1, var2
     
 ### refactored armijo code
 def armijo_line_search_ref(var1, c, d, var1_target, num_steps, dt, c_lower, 
-                       c_upper, beta, costfun_init, nodes, optim, V, dof_neighbors,
-                       example=None, gam=1e-4, max_iter=10, s0=1, w1=None,   
-                       var2=None, var2_target=None, w2=None):
+                       c_upper, beta, costfun_init, nodes, optim, V, gam=1e-4, 
+                       max_iter=10, s0=1, nonlinear_solver=None, dof_neighbors=None, 
+                       var2=None, var2_target=None, w1=None, w2=None):
     """
     Performs Projected Armijo Line Search to find the optimal step size for a source control problem.
 
@@ -575,169 +881,52 @@ def armijo_line_search_ref(var1, c, d, var1_target, num_steps, dt, c_lower,
         var1_target (np.ndarray): Target state for var1.
         num_steps (int): Number of time steps.
         dt (float): Time step size.
-        M (np.ndarray): Mass matrix.
         c_lower (float): Lower bound for the control variable.
         c_upper (float): Upper bound for the control variable.
         beta (float): Regularization parameter.
         costfun_init (float): Initial cost function value.
         nodes (int): Number of nodes in the spatial discretization.
         optim (str): Optimization type ('alltime' or 'finaltime').
+        V (FunctionSpace, optional): Finite element function space.
+        
+        Optional:
         gam (float): Armijo condition parameter (default: 1e-4).
         max_iter (int): Maximum number of iterations (default: 10).
         s0 (float): Initial step size (default: 1).
-        w1 (np.ndarray, optional): Increment for var1 in linear problems.
-        example (str, optional): Problem type ('Schnak', 'nonlinear', etc.).
-        V (FunctionSpace, optional): Function space for nonlinear problems.
+        nonlinear_solver (callable, optional): Function to solve a nonlinear 
+            problem (state equation(s)).
+            Parameters: (control, var1, var2, V, nodes, num_steps, dt, dof_neighbors)
+            Returns: var1, var2
         dof_neighbors (list, optional): Degrees of freedom neighbors for FCT.
         var2 (np.ndarray, optional): Second state variable in coupled systems.
         var2_target (np.ndarray, optional): Target state for var2 in coupled systems.
+        w1 (np.ndarray, optional): Increment for var1 in linear problems.
         w2 (np.ndarray, optional): Increment for var2 in linear problems.
 
     Returns:
         tuple: Optimal step size and updated states (var1, var2 if applicable).
+    
+    Notes:
+    - control_dif_L2: Stationarity measure defined as the norm of the projected 
+        gradient (Hinze, p. 107)
+    - the negative sign in the armijo condition comes from the descent direction
     """
     def initialize_problem():
         if w1 is None and w2 is None:
             u = df.TrialFunction(V)
             v = df.TestFunction(V)
             M = assemble_sparse(u*v*dx)
-            M_lumped = row_lump(M, nodes)
-            Ad = assemble_sparse(df.dot(df.grad(u), df.grad(v)) * df.dx)
-            return u, v, M, M_lumped, Ad
-        return None, None
+            return u, v, M
+        return None, None, None
 
-    def solve_nonlinear_problem(c_inc, var1, var2):
-        if example == 'Schnak':
-            # Specific Schnakenberg system setup
-            return solve_schnak_system(c_inc, var1, var2)
-        elif example == 'nonlinear':
-            # Generic nonlinear system setup
-            return solve_generic_nonlinear(c_inc, var1)
-        elif example == 'chtxs':
-            # Generic nonlinear system setup
-            return solve_chtxs_system(c_inc, var1, var2)
-
-    def solve_schnak_system(c_inc, var1, var2):
-        Du = 1/10
-        Dv = 8.6676
-        c_b = 0.9
-        gamma = 230.82
-        omega1 = 100
-        omega2 = 0.6
-        var1[nodes :] = np.zeros(num_steps * nodes)
-        var2[nodes :] = np.zeros(num_steps * nodes)
-        t = 0
-        wind = df.Expression(('-(x[1]-0.5)*sin(2*pi*t)','(x[0]-0.5)*sin(2*pi*t)'), degree=4, pi = np.pi, t = t)
-        for i in range(1, num_steps + 1):   # solve for uk(t_{n+1}), vk(t_{n+1})
-            start = i * nodes
-            end = (i + 1) * nodes
-            t += dt
-            wind.t = t
-
-            if i % 50 == 0:
-                print('t = ', round(t, 4))
-            
-            var1_n = var1[start - nodes : start]
-            var2_n = var2[start - nodes : start]
-            
-            # Define previous time-step solution as a function
-            var1_n_fun = vec_to_function(var1_n, V)
-            var2_n_fun = vec_to_function(var2_n, V)
-            c_inc_fun = vec_to_function(c_inc[start : end], V)
-            
-            # Solve for u using FCT (advection-dominated equation)
-            A = assemble_sparse(dot(wind, grad(v)) * u * dx)
-            mat_var1 = -(Du*Ad - omega1*A)
-            rhs_var1 = np.asarray(assemble((gamma*(c_inc_fun + var1_n_fun**2 * var2_n_fun))* v * dx))
-            var1[start : end] = FCT_alg(mat_var1, rhs_var1, var1_n, dt, nodes, M, M_lumped, dof_neighbors, source_mat=gamma*M)
-
-            var1_np1_fun = vec_to_function(var1[start : end], V)
-            M_u2 = assemble_sparse(var1_np1_fun * var1_np1_fun * u * v *dx)
-            
-            # Solve for v using a direct solver
-            rhs_var2 = np.asarray(assemble((gamma*c_b)* v * dx))
-            var2[start : end] = spsolve(M + dt*(Dv*Ad - omega2*A + gamma*M_u2), M@var2_n + dt*rhs_var2) 
-         
-        cost2 = compute_cost(var1, var2, c_inc)
-        return var1, var2, cost2
-    
-    def solve_generic_nonlinear(c_inc, var1):
-        eps = 0.0001
-        speed = 1
-        k1 = 2
-        k2 = 2
-        wind = df.Expression(('speed*2*(x[1]-0.5)*x[0]*(1-x[0])',
-                  'speed*2*(x[0]-0.5)*x[1]*(1-x[1])'), degree=4, speed = speed)
-        source_fun_expr = df.Expression('sin(k1*pi*x[0])*sin(k2*pi*x[1])', degree=4, pi=np.pi, k1=k1, k2=k2)
-        A = assemble_sparse(dot(wind, grad(v))*u * dx)
-        mat_var1 = -eps * Ad + A
-        t = 0
-        var1[nodes:] = np.zeros(num_steps * nodes) # initialise uk, keep IC
-        for i in range(1,num_steps + 1):    # solve for uk(t_{n+1})
-            start = i * nodes
-            end = (i + 1) * nodes
-            t += dt
-            if t%50 == 0:
-                print('t = ', round(t, 4))
-            
-            var1_n = var1[start - nodes : start]
-            var1_n_fun = vec_to_function(var1_n, V) 
-            c_inc_fun = vec_to_function(c_inc[start : end], V)
-
-            M_u2 = assemble_sparse(var1_n_fun**2 * u * v *dx)
-            var1_rhs = np.asarray(assemble(c_inc_fun * v *dx))
-            
-            var1[start:end] = FCT_alg(mat_var1, var1_rhs, var1_n, dt, nodes, M, M_lumped, 
-                            dof_neighbors, source_mat = -M + 1/3*M_u2)
-            
-        cost2 = compute_cost(var1, var2, c_inc)
-        return var1, var2, cost2
-    
-    def solve_chtxs_system(c_inc, var1, var2):
-        delta = 100
-        Dm = 0.05
-        Df = 0.05
-        chi = 0.25
-        gamma = 100
-        t = 0
-        Mat_var2 = M + dt * (Df * Ad + delta * M)
-        var1[nodes :] = np.zeros(num_steps * nodes)
-        var2[nodes :] = np.zeros(num_steps * nodes)
-        for i in range(1, num_steps + 1):    # solve for var2(t_{n+1}), var1(t_{n+1})
-            start = i * nodes
-            end = (i + 1) * nodes
-            t += dt
-            if i % 50 == 0:
-                print('t = ', round(t, 4))
-                    
-            var1_n = var1[start - nodes : start]    # var1(t_n) 
-            var1_n_fun = vec_to_function(var1_n, V)
-            var2_n_fun = vec_to_function(var2[start - nodes : start], V)
-            c_inc_fun = vec_to_function(c_inc[start : end], V)
-               
-            var2_rhs = np.asarray(assemble(var2_n_fun * v * dx  + dt * c_inc_fun * var1_n_fun * v * dx))
-        
-            var2[start : end] = spsolve(Mat_var2, var2_rhs)
-                
-            var2_np1_fun = vec_to_function(var2[start : end], V)
-        
-            beta = 0.5
-            Aa = assemble_sparse(exp(-beta*var1_n_fun)*dot(grad(var2_np1_fun), grad(v)) * u * dx)
-            A_var1 = - Dm * Ad + chi*Aa
-            var1_rhs = np.zeros(nodes)
-        
-            var1[start : end] =  FCT_alg(A_var1, var1_rhs, var1_n, dt, nodes, M, M_lumped, dof_neighbors)
-        
-        cost2 = compute_cost(var1, var2, c_inc)
-        return var1, var2, cost2
-
-    def compute_cost(var1_inc, var2_inc, c_inc):
-        return cost_functional(var1_inc, var1_target, c_inc, num_steps, dt, M, beta, optim=optim, var2=var2_inc, var2_target=var2_target)
+    def compute_cost(var1, var2, c):
+        return cost_functional(var1, var1_target, c, num_steps, dt, M, beta, 
+                               optim=optim, var2=var2, var2_target=var2_target)
 
     def update_control(c, s, d):
         return np.clip(c + s * d, c_lower, c_upper)
 
-    u, v, M, M_lumped, Ad = initialize_problem()
+    u, v, M = initialize_problem()
 
     s = s0
     control_dif_L2 = 1
@@ -748,7 +937,8 @@ def armijo_line_search_ref(var1, c, d, var1_target, num_steps, dt, c_lower,
     for k in range(max_iter): 
         c_inc = update_control(c, s, d)
         if w1 is None:
-            var1, var2, cost2 = solve_nonlinear_problem(c_inc, var1, var2)
+            var1, var2 = nonlinear_solver(c_inc, var1, var2, V, nodes, num_steps, dt, dof_neighbors)
+            cost2 = compute_cost(var1, var2, c_inc)
         else:
             # Assumes a linear problem and state increments given
             var1_inc = var1 + s * w1
@@ -765,6 +955,7 @@ def armijo_line_search_ref(var1, c, d, var1_target, num_steps, dt, c_lower,
         print(f'Cost difference={armijo}')
         print(f'Threshold value: {-gam/s*control_dif_L2=}')
         
+        # Check Armijo stopping condition
         if armijo <= -gam / s * control_dif_L2:
             print('Converged: Armijo condition satisfied.')
             break
@@ -774,83 +965,8 @@ def armijo_line_search_ref(var1, c, d, var1_target, num_steps, dt, c_lower,
     if armijo > -gam / s * control_dif_L2:
         print(f"Stopped: Maximum iterations ({max_iter}) exceeded.")
 
-    return (s, var1, var2) if var2 is not None else (s, var1, k)
+    return (s, var1, var2, c_inc) if var2 is not None else (var1, c_inc, k)
 
-
-# def armijo_line_search_chtxs(m, f, q, c, d, mhatvec, fhatvec, Mat_fq, chi, Dm, Df, num_steps,
-#                              dt, nodes, M, M_Lump, Ad, c_lower, c_upper, beta, V, dof_neighbors, gam = 10**-4, 
-#                              max_iter = 5, s0 = 1):
-#     '''
-#     Performs Projected Armijo Line Search and returns optimal step size.
-#     gam: parameter in tolerance for decrease in cost functional value
-#     max_iter: max number of armijo iterations
-#     s0: step size at the first iteration.
-#     m,f: state variables
-#     q: adjoint variable related to the control by the gradient equation
-#     mhatvec, fhatvec: desired states for m, f at final time T
-#     '''
-#     u = df.TrialFunction(V)
-#     v = df.TestFunction(V)
-
-#     k = 0 # counter
-#     # s = 1 # initial step size
-#     # Stationarity measure: Norm of the projected gradient (Hinze, p. 107)
-#     grad_costfun_L2 = L2_norm_sq_Q(np.clip(c + s * d, c_lower, c_upper) - c,
-#                                  num_steps, dt, M)
-#     print(f'{grad_costfun_L2=}')
-#     costfun_init = cost_functional_proj_FT(m, f, c, d, s, mhatvec, fhatvec,
-#                               num_steps, dt, M, c_lower, c_upper, beta)
-    
-#     armijo = 10**5 # initialise the difference in cost function norm decrease
-#     # note the negative sign in the condition comes from the descent direction
-#     while armijo > - gam / s * grad_costfun_L2 and k < max_iter:
-#         s = s0*( 1/2 ** k)
-#         # Calculate the incremented c using the new step size
-#         # c_inc = np.clip(c - s * (beta * c - m * q), c_lower, c_upper)
-#         c_inc = np.clip(c + s * d, c_lower, c_upper)
-
-#         print(f'{k =}')
-#         ########## calculate new m,f corresponding to c_inc ###################
-#         print('Solving state equations...')
-#         t=0
-#         # initialise m,f and keep ICs
-#         f[nodes:] = np.zeros(num_steps * nodes)
-#         m[nodes:] = np.zeros(num_steps * nodes)
-#         for i in range(1,num_steps+1):    # solve for f(t_{n+1}), m(t_{n+1})
-#             start = i * nodes
-#             end = (i + 1) * nodes
-#             t += dt
-#             if i % 50 == 0:
-#                 print('t =', round(t, 4))
-                
-#             m_n = m[start - nodes : start]    # m(t_n) 
-#             m_n_fun = vec_to_function(m_n,V)
-#             c_inc_fun = vec_to_function(c_inc[start : end],V)
-#             f_n_fun = vec_to_function(f[start - nodes : start],V)
-            
-#             f_rhs = rhs_chtx_f(f_n_fun, m_n_fun, c_inc_fun, dt, v)
-            
-#             f[start : end] = spsolve(Mat_fq, f_rhs)
-            
-#             f_np1_fun = vec_to_function(f[start : end], V)
-
-#             A_m = mat_chtx_m(f_np1_fun, m_n_fun, Dm, chi, u, v)
-#             m_rhs = rhs_chtx_m(m_n_fun, v)
-            
-#             m[start : end] = FCT_alg(A_m, m_rhs, m_n, dt, nodes, M, M_Lump, 
-#                                       dof_neighbors)
-        
-#         #######################################################################
-        
-#         cost2 = cost_functional_proj_FT(m, f, c_inc, d, s, mhatvec, \
-#                            fhatvec, num_steps, dt, M, c_lower, c_upper, beta)
-#         armijo = cost2 - costfun_init
-#         grad_costfun_L2 = L2_norm_sq_Q(c_inc - c, num_steps, dt, M)
-       
-#         k += 1
-        
-#     print(f'Armijo exit at {k=} with {s=}')
-#     return s
 
 # def armijo_line_search_sbr_drift(u, p, c, d, uhatvec, eps, drift, num_steps, dt, nodes, M, M_Lump, Ad, Arot,
 #                                  c_lower, c_upper, beta, V, dof_neighbors, gam = 10**-4, max_iter = 5, s0 = 1,
@@ -977,7 +1093,7 @@ def FCT_alg(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, source_mat=None)
     u_n (numpy.ndarray): The solution vector at the current time step.
     dt (float): The time step size.
     nodes (int): Total number of nodes in the mesh.
-    M (scipy.sparse.spmatrix): The mass matrix.
+    M (scipy.sparse.lil_matrix): The mass matrix.
     M_lumped (scipy.sparse.spmatrix): The lumped mass matrix.
     dof_neighbors (list of lists): A list of lists where each entry contains the neighboring DOFs for each node.
     source_mat (scipy.sparse.spmatrix, optional): The decoupled matrix terms from the RHS. Defaults to None.
@@ -988,36 +1104,36 @@ def FCT_alg(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, source_mat=None)
     D = artificial_diffusion_mat(A)
     M_diag = M.diagonal()
     M_lumped_diag = M_lumped.diagonal()
-
+    Mat_u_Low = lil_matrix(D.shape)
+    
     ## 1. Calculate low-order solution u^{n+1} using previous time step solution
     if source_mat is None:
-        Mat_u_Low = M_lumped - dt * (A + D)
+        Mat_u_Low[:, :] = M_lumped[:, :] - dt * (A[:, :] + D[:, :])
 
     else:
-        Mat_u_Low = M_lumped - dt * (A + D - source_mat)
+        Mat_u_Low[:, :] = D[:, :] - dt * (A[:, :] + D[:, :] - source_mat[:, :])
 
     rhs_u_Low = M_lumped @ u_n + dt * rhs
-    u_Low = spsolve(Mat_u_Low, rhs_u_Low)
+    u_Low = spsolve(csr_matrix(Mat_u_Low), rhs_u_Low)
     
     ## 2. Calculate raw antidiffusive flux
     # approximate the derivative du/dt using Chebyshev semi-iterative method
     rhs_du_dt = np.squeeze(np.asarray(A @ u_Low + rhs)) # flatten to vector array
     du_dt = ChebSI(rhs_du_dt, M, M_diag, 20, 0.5, 2)
-    
+
     # corrected flux calculation(only use neighbouring nodes):
-    F = np.zeros((nodes,nodes))
+    F = lil_matrix((nodes, nodes))  # Use lil_matrix for efficient modifications
     for i in range(nodes):
         for j in dof_neighbors[i]: # flux from node j to node i, j is a neighbour of i
             F[i,j] = M[i, j] * (du_dt[i] - du_dt[j]) + D[i, j] * (u_Low[i] - u_Low[j])
-    F = csr_matrix(F)
-    F.setdiag(np.zeros(nodes))
+    F.setdiag(0)
     
     ## 3. Calculate correction factor matrix Alpha 
     # ---------------------  Zalesak algorithm ------------------------------
     # (1) compute sum of pos/neg fluxes into node i (P)
     p_pos = np.ravel(F.maximum(0).sum(axis = 1))
     p_neg = np.ravel(F.minimum(0).sum(axis = 1))
-    
+
     # (2) compute distance to local extremum of u_Low(Q) 
     u_Low_max = np.zeros(nodes)
     u_Low_min = np.zeros(nodes)
@@ -1037,7 +1153,7 @@ def FCT_alg(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, source_mat=None)
     r_pos = np.ones(nodes)
     r_neg = np.ones(nodes)
     r_pos[p_pos != 0] = np.minimum(1, M_lumped_diag[p_pos != 0]*q_pos[ p_pos!= 0]
-                                 / (dt * p_pos[p_pos != 0]))
+                                  / (dt * p_pos[p_pos != 0]))
     r_neg[p_neg != 0] = np.minimum(1, M_lumped_diag[p_neg != 0]*q_neg[ p_neg!= 0]
                                   / (dt * p_neg[p_neg != 0]))
     
@@ -1053,4 +1169,34 @@ def FCT_alg(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, source_mat=None)
     
     ## 4. Correct u_Low^{n+1} explicitly:
     u_np1 = u_Low + dt*Fbar/M_lumped_diag
+    
     return u_np1
+
+def import_data_final(file_path, file_name, nodes, vertextodof):
+    '''
+    Loads the target data: 
+        hat{m} if input is "m", or hat{f} if input is "f"
+    Size of the loaded array should be sqnodes x sqnodes.
+    Output = numpy array sqnodes x sqnodes.
+    '''
+    sqnodes = round(np.sqrt(nodes))
+    data = np.genfromtxt(file_path + file_name + '.csv', delimiter=',')
+    
+    data_re = reorder_vector_from_dof_time(data, 1, nodes, vertextodof)
+    data_re = data_re.reshape((sqnodes,sqnodes))
+    return data_re, data
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

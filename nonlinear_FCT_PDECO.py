@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import os
 from pathlib import Path
 from helpers import *
+from helpers import solve_nonlinear_equation
 
 import csv
 from datetime import datetime
@@ -50,7 +51,7 @@ speed = 1
 
 t0 = 0
 dt = 0.001
-T = 1
+T = 0.5
 T_data = 2
 num_steps = round((T-t0)/dt)
 tol = 10**-4 # !!!
@@ -86,7 +87,6 @@ boundary_nodes, boundary_nodes_dof = generate_boundary_nodes(nodes, vertextodof)
 
 mesh.init(0, 1)
 dof_neighbors = find_node_neighbours(mesh, nodes, vertextodof)
-
 
 # ----------------------------------------------------------------------------
 
@@ -213,7 +213,8 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
             
         pk_np1 = pk[end : end + nodes] # pk(t_{n+1})
         uk_n_fun = vec_to_function(uk[start : end], V) # uk(t_n)
-        
+        M_u2 = assemble_sparse(uk_n_fun**2 * u * v *dx)
+
         p_rhs = np.zeros(nodes)
         pk[start:end] = FCT_alg(A_p, p_rhs, pk_np1, dt, nodes, M, M_Lump, dof_neighbors,
                                 source_mat = M_u2 - M)
@@ -234,46 +235,47 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     #                    optim = 'finaltime', dof_neighbors= dof_neighbors,
     #                    example = 'nonlinear', max_iter = max_iter_armijo)
     
-    sk, u_inc, iters = armijo_line_search_ref(uk, ck, dk, uhat_T, num_steps, dt, 
+    # sk, u_inc, ckp1, iters = armijo_line_search_ref(uk, ck, dk, uhat_T, num_steps, dt, 
+    #                    c_lower, c_upper, beta, cost_fun_k, nodes, 'finaltime', 
+    #                    V, dof_neighbors=dof_neighbors, example='nonlinear', max_iter=max_iter_armijo)
+    sk, u_inc, ckp1, iters = armijo_line_search_ref(uk, ck, dk, uhat_T, num_steps, dt, 
                        c_lower, c_upper, beta, cost_fun_k, nodes, 'finaltime', 
-                       V, dof_neighbors, example='nonlinear', max_iter=max_iter_armijo)
-    
+                       V, dof_neighbors=dof_neighbors, 
+                       nonlinear_solver=solve_nonlinear_equation, max_iter=max_iter_armijo)
+    # (var1, c, d, var1_target, num_steps, dt, c_lower, 
+                           # c_upper, beta, costfun_init, nodes, optim, V, gam=1e-4, 
+                           # max_iter=10, s0=1, nonlinear_solver=None, dof_neighbors=None, 
+                           # var2=None, var2_target=None, w1=None, w2=None):
     if iters == max_iter_armijo:
-        # if fail_count == 0:
-        #     # save the current solution as the last best solution 
-        #     # i.e. uk, pk with the control last updated in the previous iteration
-        #     u_backup = uk
-        #     p_backup = pk
-        #     c_backup = ck
-        #     it_backup = it
         fail_count += 1
         fail_pass = True
+        if fail_count == 3:
+            # end while loop, assume we have found the most optimal solution
+            print("Maximum number of failed Armijo line search iterations reached. Exiting...")
+            break
+        
     elif iters < max_iter_armijo:
-        # if armijo converged, reset the counter
-        fail_count = 0
-        fail_restart_count += 1
+        if fail_count > 0:
+            # if armijo converged after a fail, reset the counter
+            fail_count = 0
+            fail_restart_count += 1
         # save the current solution as the last best solution 
         # i.e. uk, pk with the control last updated in the previous iteration
         u_backup = uk
         p_backup = pk
         c_backup = ck
         it_backup = it
-        
-    if fail_count == 3:
-        # end while loop, assume we have found the most optimal solution
-        print("Maximum number of failed Armijo line search iterations reached. Exiting...")
-        break
     
-    if fail_restart_count == 5:
-        # end while loop, assume we have found the most optimal solution
-        print("Maximum number of restarts reached. Exiting...")
-        break
+        if fail_restart_count == 5:
+            # end while loop, assume we have found the most optimal solution
+            print("Maximum number of restarts reached. Exiting...")
+            break
      
     ###########################################################################
     ## 5. Calculate new control and project onto admissible set
     ###########################################################################
 
-    ckp1 = np.clip(ck + sk*dk,c_lower,c_upper)
+    # ckp1 = np.clip(ck + sk*dk,c_lower,c_upper)
     cost_fun_kp1 = cost_functional(u_inc, uhat_T, ckp1, num_steps, dt, M, beta,
                            optim='finaltime')
     print(f'{cost_fun_kp1=}')
@@ -287,7 +289,7 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
         start = i * nodes
         end = (i+1) * nodes
         max_ck.append(np.amax(ck[start:end]))
-    np.mean(max_ck)
+
     print('Mean of the control maxima over time steps:', np.mean(max_ck))
     mean_control_vals.append(np.mean(max_ck))
         
@@ -318,29 +320,56 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
         c_re = c_re.reshape((sqnodes,sqnodes))
         p_re = p_re.reshape((sqnodes,sqnodes))
         
-        if show_plots is True and (i%5 == 0 or i == num_steps-1):
+        if show_plots is True and (i%20 == 0 or i == num_steps-1):
             
-            fig = plt.figure(figsize=(20, 5))
+            # fig = plt.figure(figsize=(20, 5))
 
-            ax = fig.add_subplot(1, 4, 1)
+            # ax = fig.add_subplot(1, 4, 1)
+            # im1 = ax.imshow(uhat_T_re)
+            # cb1 = fig.colorbar(im1, ax=ax)
+            # ax.set_title(f'{it=}, Desired state for $u$ taken at t={T_data}')
+        
+            # ax = fig.add_subplot(1, 4, 2)
+            # im2 = ax.imshow(u_re)
+            # cb2 = fig.colorbar(im2, ax=ax)
+            # ax.set_title(f'Computed state $u$ at t = {round(tU, 5)}')
+        
+            # ax = fig.add_subplot(1, 4, 3)
+            # im3 = ax.imshow(p_re)
+            # cb3 = fig.colorbar(im3, ax=ax)
+            # ax.set_title(f'Computed adjoint $p$ at t = {round(tP, 5)}')
+        
+            # ax = fig.add_subplot(1, 4, 4)
+            # im4 = ax.imshow(c_re)
+            # cb4 = fig.colorbar(im4, ax=ax)
+            # ax.set_title(f'Computed control $c$ at t = {round(tP, 5)}')
+            
+            fig = plt.figure(figsize=(15, 10))
+
+            ax = fig.add_subplot(2, 3, 1)
             im1 = ax.imshow(uhat_T_re)
             cb1 = fig.colorbar(im1, ax=ax)
-            ax.set_title(f'{it=}, Desired state for $u$ at t = {round(tU, 5)}')
+            ax.set_title(f'{it=}, Desired state for $u$ taken at t={T_data}')
         
-            ax = fig.add_subplot(1, 4, 2)
+            ax = fig.add_subplot(2, 3, 2)
             im2 = ax.imshow(u_re)
             cb2 = fig.colorbar(im2, ax=ax)
-            ax.set_title(f'Computed state $u$ at t = {round(tU, 5)}')
+            ax.set_title(f'Before update: Computed $u$ at t = {round(tU, 5)}')
         
-            ax = fig.add_subplot(1, 4, 3)
+            ax = fig.add_subplot(2, 3, 3)
             im3 = ax.imshow(p_re)
             cb3 = fig.colorbar(im3, ax=ax)
-            ax.set_title(f'Computed adjoint $p$ at t = {round(tP, 5)}')
+            ax.set_title(f'Before update: Computed adjoint $p$ at t = {round(tP, 5)}')
         
-            ax = fig.add_subplot(1, 4, 4)
+            ax = fig.add_subplot(2, 3, 4)
+            im2 = ax.imshow(u_re)
+            cb2 = fig.colorbar(im2, ax=ax)
+            ax.set_title(f'After update: Computed state $u$ at t = {round(tU, 5)}')
+    
+            ax = fig.add_subplot(2, 3, 5)
             im4 = ax.imshow(c_re)
             cb4 = fig.colorbar(im4, ax=ax)
-            ax.set_title(f'Computed control $c$ at t = {round(tP, 5)}')
+            ax.set_title(f'Updated control $c$ at t = {round(tP, 5)}')
             
             fig.tight_layout(pad=3.0)
             plt.savefig(out_folder_name + f'/it_{it}_plot_{i:03}.png')
@@ -365,7 +394,6 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
         ax2 = fig2.add_subplot(1, 3, 2)
         im2_u = plt.plot(np.arange(1, it + 1), cost_fidelity_vals_u)
         plt.title('Data fidelity norms in L2(Omega)^2')
-        plt.legend()
         
         ax2 = fig2.add_subplot(1, 3, 3)
         im3 = plt.plot(np.arange(1, it + 1), cost_control_vals)

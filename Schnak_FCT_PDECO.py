@@ -9,8 +9,8 @@ from helpers import *
 ### Flux-corrected transport method for the PDECO problem for the Schnakenberg model
 # min_{u,v,a,b} beta1/2*||u-\hat{u}||^2 + beta2/2*||v-\hat{v}||^2 + alpha1/2*||a||^2 + alpha2/2*||b||^2  (norms in L^2)
 # subject to:
-#   du/dt - Du grad^2 u + om1 w \cdot grad(u) + gamma(u-u^2v-a) = 0       in Ω
-#   dv/dt - Dv grad^2 v + om2 w \cdot grad(v) + gamma(u^2v-b)   = 0       in Ω
+#   du/dt - Du grad^2 u + om1 w \cdot grad(u) + gamma(u-u^2v-a) = 0       in Ωx[0,T]
+#   dv/dt - Dv grad^2 v + om2 w \cdot grad(v) + gamma(u^2v-b)   = 0       in Ωx[0,T]
 #                        zero flux BCs       on ∂Ω
 #                                     u(0) = u0(x)       in Ω
 
