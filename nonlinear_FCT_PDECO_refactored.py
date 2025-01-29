@@ -75,9 +75,9 @@ pk = np.zeros(vec_length)
 pk[num_steps * nodes :] = uhat_T - uk[num_steps * nodes :]
 pk = solve_adjoint_nonlinear_equation(uk, uhat_T, pk, T, V, nodes, num_steps, dt, dof_neighbors)
 
-cost_fun_k = cost_functional(uk, uhat_T, ck, num_steps, dt, M, beta, optim='finaltime')
-cost_fun_kp1 = (2 + tol)*cost_fun_k
-stop_crit = rel_err(cost_fun_kp1, cost_fun_k)
+cost_fun_old = cost_functional(uk, uhat_T, ck, num_steps, dt, M, beta, optim='finaltime')
+cost_fun_new = (2 + tol)*cost_fun_old
+stop_crit = rel_err(cost_fun_new, cost_fun_old)
 
 dk = np.zeros(vec_length)
 eps, speed, k1, k2, _ = get_nonlinear_eqns_params()
@@ -108,25 +108,25 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     ## 2. Find optimal stepsize with Armijo line search and calculate uk, ck
     print('Starting Armijo line search...')
     uk, ck, iters = armijo_line_search_ref(uk, ck, dk, uhat_T, num_steps, dt, 
-                       c_lower, c_upper, beta, cost_fun_k, nodes, 'finaltime', 
+                       c_lower, c_upper, beta, cost_fun_old, nodes, 'finaltime', 
                        V, dof_neighbors=dof_neighbors, 
                        nonlinear_solver=solve_nonlinear_equation, max_iter=max_iter_armijo)
     
-    ## 3. Solve the adjoint equation using ukp1, ckp1
+    ## 3. Solve the adjoint equation using new uk and ck
     pk = solve_adjoint_nonlinear_equation(uk, uhat_T, pk, T, V, nodes, num_steps, dt, dof_neighbors)
     
     ## 4. Calculate metrics
-    cost_fun_kp1 = cost_functional(u_inc, uhat_T, ckp1, num_steps, dt, M, beta,
+    cost_fun_new = cost_functional(uk, uhat_T, ck, num_steps, dt, M, beta,
                            optim='finaltime')
-    stop_crit = rel_err(cost_fun_kp1, cost_fun_k)
+    stop_crit = rel_err(cost_fun_new, cost_fun_old)
     eval_sim = 1/T * 1/((a2-a1)**2) * L2_norm_sq_Q(ck, num_steps, dt, M)
 
-    print(f'{cost_fun_kp1=}')
+    print(f'{cost_fun_new=}')
     print(f'{eval_sim=}')
 
-    cost_fun_vals.append(cost_fun_kp1)
-    cost_fidel_vals.append(L2_norm_sq_Omega(u_inc[num_steps*nodes:] - uhat_T, M))
-    cost_c_vals.append(L2_norm_sq_Q(ckp1, num_steps, dt, M))
+    cost_fun_vals.append(cost_fun_new)
+    cost_fidel_vals.append(L2_norm_sq_Omega(uk[num_steps*nodes:] - uhat_T, M))
+    cost_c_vals.append(L2_norm_sq_Q(ck, num_steps, dt, M))
     
     uk_re = reorder_vector_from_dof_time(uk, num_steps + 1, nodes, vertextodof)
     ck_re = reorder_vector_from_dof_time(ck, num_steps + 1, nodes, vertextodof)
@@ -219,8 +219,7 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
         
     ## Make updates
     it += 1
-    cost_fun_k = cost_fun_kp1
-    ck = ckp1
+    cost_fun_old = cost_fun_new
     
     print(f'{stop_crit=}')
 
@@ -228,12 +227,6 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
 # Record the end time of the simulation
 end_time = time.time()
 
-if fail_count == 3  or fail_restart_count == 5 or (it == max_iter_GD and fail_count > 0):
-    print(f'Restoring the solutions from iteration {it_backup}')
-    uk = u_backup
-    pk = p_backup
-    ck = c_backup
-    
 # Mapping to order the solution vectors based on vertex indices
 uk_re = reorder_vector_from_dof_time(uk, num_steps + 1, nodes, vertextodof)
 ck_re = reorder_vector_from_dof_time(ck, num_steps + 1, nodes, vertextodof)

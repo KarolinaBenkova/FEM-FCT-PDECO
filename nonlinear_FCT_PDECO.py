@@ -231,21 +231,19 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     
     print('Starting Armijo line search...')
     # sk, u_inc, iters = armijo_line_search(uk, ck, dk, uhat_T, num_steps, dt, M, 
-    #                    c_lower, c_upper, beta, cost_fun_k, nodes,  V = V,
-    #                    optim = 'finaltime', dof_neighbors= dof_neighbors,
-    #                    example = 'nonlinear', max_iter = max_iter_armijo)
+    #                     c_lower, c_upper, beta, cost_fun_k, nodes,  V = V,
+    #                     optim = 'finaltime', dof_neighbors= dof_neighbors,
+    #                     example = 'nonlinear', max_iter = max_iter_armijo)
     
     # sk, u_inc, ckp1, iters = armijo_line_search_ref(uk, ck, dk, uhat_T, num_steps, dt, 
     #                    c_lower, c_upper, beta, cost_fun_k, nodes, 'finaltime', 
     #                    V, dof_neighbors=dof_neighbors, example='nonlinear', max_iter=max_iter_armijo)
-    sk, u_inc, ckp1, iters = armijo_line_search_ref(uk, ck, dk, uhat_T, num_steps, dt, 
+    
+    u_inc, ckp1, iters = armijo_line_search_ref(uk, ck, dk, uhat_T, num_steps, dt, 
                        c_lower, c_upper, beta, cost_fun_k, nodes, 'finaltime', 
                        V, dof_neighbors=dof_neighbors, 
                        nonlinear_solver=solve_nonlinear_equation, max_iter=max_iter_armijo)
-    # (var1, c, d, var1_target, num_steps, dt, c_lower, 
-                           # c_upper, beta, costfun_init, nodes, optim, V, gam=1e-4, 
-                           # max_iter=10, s0=1, nonlinear_solver=None, dof_neighbors=None, 
-                           # var2=None, var2_target=None, w1=None, w2=None):
+
     if iters == max_iter_armijo:
         fail_count += 1
         fail_pass = True

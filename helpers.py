@@ -706,11 +706,13 @@ def solve_nonlinear_equation(control, var1, var2, V, nodes, num_steps, dt, dof_n
     # source_fun_expr = df.Expression('sin(k1*pi*x[0])*sin(k2*pi*x[1])', degree=4, pi=np.pi, k1=k1, k2=k2)
     u = df.TrialFunction(V)
     v = df.TestFunction(V)
-    M = assemble_sparse(u*v*dx)
     M_lil = assemble_sparse_lil(u*v*dx)
-    M_lumped = row_lump(M, nodes)
-    Mat_var1 = assemble_sparse_lil((-eps*dot(grad(u), grad(v)) + dot(wind, grad(v))*u)* dx)
-
+    M_lumped = row_lump(M_lil, nodes)
+    Ad = assemble_sparse_lil(dot(grad(u), grad(v)) * dx)
+    A = assemble_sparse_lil(dot(wind, grad(v))*u * dx)
+    Mat_var1 = lil_matrix(A.shape)
+    Mat_var1[:,] = A[:,:] - eps * Ad[:,:]
+    
     # Reset variable but keep initial conditions
     var1[nodes:] = np.zeros(num_steps * nodes)
     t = 0
@@ -719,20 +721,20 @@ def solve_nonlinear_equation(control, var1, var2, V, nodes, num_steps, dt, dof_n
         start = i * nodes
         end = (i + 1) * nodes
         t += dt
-        if t % 50 == 0:
+        if i % 20 == 0:
             print('t = ', round(t, 4))
 
         var1_n = var1[start - nodes : start]
         var1_n_fun = vec_to_function(var1_n, V) 
         control_fun = vec_to_function(control[start : end], V)
 
-        # M_u2 = assemble_sparse_lil(var1_n_fun**2 * u * v *dx)
-        Mat_on_rhs = assemble_sparse_lil((-1*u + 1/3*var1_n_fun**2 * u) * v *dx) # -M + 1/3*M_u2
+        M_u2 = assemble_sparse_lil(var1_n_fun**2 * u * v *dx)
+        Mat_rhs = lil_matrix(A.shape)
+        Mat_rhs[:,:] = -M_lil[:,:] + 1/3*M_u2[:,:]
         var1_rhs = np.asarray(assemble(control_fun * v *dx))
-        print('before FCT')
         var1[start:end] = FCT_alg(Mat_var1, var1_rhs, var1_n, dt, nodes, M_lil, M_lumped, 
-                        dof_neighbors, source_mat = Mat_on_rhs)
-
+                        dof_neighbors, source_mat = Mat_rhs)
+    print(var1)
     return var1, None
 
 def solve_adjoint_nonlinear_equation(uk, uhat_T, pk, T, V, nodes, num_steps, dt, dof_neighbors):
@@ -769,12 +771,12 @@ def solve_adjoint_nonlinear_equation(uk, uhat_T, pk, T, V, nodes, num_steps, dt,
     
     u = df.TrialFunction(V)
     v = df.TestFunction(V)
-    M = assemble_sparse(u*v*dx)
     M_lil = assemble_sparse_lil(u*v*dx)
-    M_lumped = row_lump(M, nodes)
-    Ad = assemble_sparse(dot(grad(u), grad(v)) * dx)
-    A = assemble_sparse(dot(wind, grad(v))*u * dx)
-    Mat_p = - A - eps * Ad
+    M_lumped = row_lump(M_lil, nodes)
+    Ad = assemble_sparse_lil(dot(grad(u), grad(v)) * dx)
+    A = assemble_sparse_lil(dot(wind, grad(v))*u * dx)
+    Mat_p = lil_matrix(A.shape)
+    Mat_p[:,] = -A[:,:] - eps * Ad[:,:]
 
     # Reset variable but keep initial conditions
     pk[num_steps * nodes :] = uhat_T - uk[num_steps * nodes :]
@@ -789,11 +791,12 @@ def solve_adjoint_nonlinear_equation(uk, uhat_T, pk, T, V, nodes, num_steps, dt,
             
         pk_np1 = pk[end : end + nodes]                  # pk(t_{n+1})
         uk_n_fun = vec_to_function(uk[start : end], V)  # uk(t_n)
-        M_u2 = assemble_sparse(uk_n_fun**2 * u * v *dx)
-
+        M_u2 = assemble_sparse_lil(uk_n_fun**2 * u * v *dx)
+        Mat_rhs = lil_matrix(A.shape)
+        Mat_rhs[:,:] = M_u2[:,:] - M_lil[:,:] 
         p_rhs = np.zeros(nodes)
         pk[start:end] = FCT_alg(Mat_p, p_rhs, pk_np1, dt, nodes, M_lil, M_lumped, 
-                                dof_neighbors, source_mat = M_u2 - M)
+                                dof_neighbors, source_mat = Mat_rhs)
     return pk
 
 def solve_chtxs_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbors):
