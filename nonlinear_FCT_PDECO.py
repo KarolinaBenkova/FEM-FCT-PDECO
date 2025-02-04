@@ -66,7 +66,7 @@ if not Path(out_folder_name).exists():
     Path(out_folder_name).mkdir(parents=True)
 
 wind = Expression(('speed*2*(x[1]-0.5)*x[0]*(1-x[0])',
-          'speed*2*(x[0]-0.5)*x[1]*(1-x[1])'), degree=4, speed = speed)
+          '-speed*2*(x[0]-0.5)*x[1]*(1-x[1])'), degree=4, speed = speed)
 source_fun_expr = Expression('sin(k1*pi*x[0])*sin(k2*pi*x[1])', degree=4, pi=np.pi, k1=k1, k2=k2)
 
 # Initialize a square mesh
