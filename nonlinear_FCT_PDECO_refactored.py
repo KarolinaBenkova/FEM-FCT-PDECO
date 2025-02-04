@@ -140,7 +140,7 @@ start_time = time.time()
 # ------------------------ PROJECTED GRADIENT DESCENT ------------------------
 ##############################################################################
 
-while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
+while (stop_crit >= tol or fail_pass) and it < 2:#max_iter_GD:
     print(f"\nIteration: {it}")
 
     ## 1. choose the descent direction
@@ -223,9 +223,13 @@ ck.tofile(out_folder + f"/Schnak_adv_T{T}_beta{beta}_c.csv", sep = ",")
 pk.tofile(out_folder + f"/Schnak_adv_T{T}_beta{beta}_p.csv", sep = ",")
 
 # Prepare the data to be written to the CSV
-data = {"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    "T": T, "beta": beta, "tol": tol, "c_lower": c_lower, "c_upper": c_upper,
-    "eval_sim": eval_sim, "simulation_duration": simulation_duration,
+data = {"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+    "Sim. duration": round(simulation_duration, 2), "T": T, "T_data" : T_data, "beta": beta,
+    "tol": tol, "GD its" : it, "Armijo its" : armijo_its, 
+    "C_ad": f"[{c_lower}, {c_upper}]",
+    "Mean c. in L^2(Q)^2": eval_sim, 
+    "Misfit norm" : misfit_norm,
+    "J(c_true)" : true_control_norm/beta,
     "out_folder_name": out_folder}
 
 csv_file_path = "NL_FT_simulation_results.csv"
@@ -233,8 +237,9 @@ file_exists = os.path.isfile(csv_file_path)
 
 # Write the data to the CSV file
 with open(csv_file_path, mode="a", newline="") as csv_file:
-    fieldnames = ["timestamp", "T", "beta", "tol", "c_lower", "c_upper",
-                  "eval_sim", "simulation_duration", "out_folder_name"]
+    fieldnames = ["timestamp", "Sim. duration", "T", "T_data", "beta", "tol", 
+                  "GD its",  "Armijo its", "C_ad",
+                  "Mean c. in L^2(Q)^2",  "Misfit norm", "J(c_true)", "out_folder_name"]
     writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
 
     # Write the header only if the file does not exist
@@ -244,6 +249,7 @@ with open(csv_file_path, mode="a", newline="") as csv_file:
     writer.writerow(data)
 
 print(f"\nExit:\nFinal stopping criterion: {stop_crit} \nIterations: {it}")
+print("Armijo iterations:", armijo_its)
 print("Solutions saved to:", out_folder)
 print("||u(T) - uhat_T|| in L^2(Ω)^2 :", misfit_norm)
 print("Average control in L^2(Q)^2:", eval_sim)
