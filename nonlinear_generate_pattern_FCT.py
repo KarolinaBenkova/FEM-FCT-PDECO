@@ -13,6 +13,7 @@ Solves the nonlinear advection-reaction-diffusion equation:
     du/dt + div(-eps * grad(u) + w * u) - u + (1/3) * u^3 = s    in Ω × [0,T]
                       (-eps * grad(u) + w * u) ⋅ n = 0           on ∂Ω × [0,T]
                                               u(0) = u0(x)       in Ω
+and calculates the L^2(Q)-norm of the source function (Q = Ω × [0,T]).                      
 
 where w is a velocity/wind vector satisfying:
      div(w) = 0  in Ω × [0,T]
@@ -23,18 +24,18 @@ Note: This leads to Neumann boundary condition: du/dn = 0 on ∂Ω × [0,T].
 # ---------------------------- General Parameters ----------------------------
 
 a1, a2 = 0, 1
-dx = 0.025  # Element size
+dx = 0.025 # Element size
 intervals = round((a2 - a1) / dx)
 
 dt = 0.001
 T = 2
 num_steps = round(T / dt)
 
-show_plots = True  # Toggle for visualization
+show_plots = True # Toggle for visualization
 
 # ---------------------------- PDE Coefficients ------------------------------
 
-eps = 1e-4  # Diffusion coefficient
+eps = 1e-4  # Diffusion parameter
 speed = 1   # Wind speed
 
 # ----------------------------- Source Function ------------------------------
@@ -42,6 +43,12 @@ speed = 1   # Wind speed
 k, l = 2, 2
 source_fun = df.Expression( "sin(k1 * pi * x[0]) * sin(k2 * pi * x[1])",
     degree=4, pi=np.pi, k1=k, k2=l)
+
+# Find L^2-norm of true control over Ω × [0,T]
+source_vector = df.interpolate(source_fun, V).vector().get_local()
+source_vector_td = np.tile(source_vector, num_steps + 1)
+control_norm = hp.L2_norm_sq_Q(source_vector_td, num_steps, dt, M)
+print(f"L^2-norm of the control over Ω × [0,{T}]:", control_norm)
 
 # ----------------------------- Wind Field -----------------------------------
 
@@ -51,9 +58,9 @@ wind = df.Expression(("speed * 2 * (x[1] - 0.5) * x[0] * (1 - x[0])",
 
 # ---------------------------- Output File Path ------------------------------
 
-output_dir = Path(f"NL_data_eps{eps}_sp{speed}")
+output_dir = Path(f"NL_data_eps{eps}_sp{speed}_T{T}")
 output_dir.mkdir(parents=True, exist_ok=True)
-output_filename = output_dir / "advection_t_u.csv"
+output_filename = output_dir / "advection.csv"
 
 # ----------------------- Initialize Finite Element Mesh ---------------------
 
@@ -65,7 +72,7 @@ vertex_to_dof = df.vertex_to_dof_map(V)
 u = df.TrialFunction(V)
 v = df.TestFunction(V)
 
-# Create connectivity between vertices to find neighboring nodes
+# Create connectivities between vertices to find neighboring nodes
 mesh.init(0, 1)
 dof_neighbors = hp.find_node_neighbours(mesh, nodes, vertex_to_dof)
 

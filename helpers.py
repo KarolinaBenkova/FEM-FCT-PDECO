@@ -8,26 +8,7 @@ from scipy.sparse.linalg import spsolve
 import os
 
 # Contains functions used in all scripts
-
-def reorder_vector_to_dof(vec, nodes, vertextodof):
-    """
-    Reorders a vector to match the degrees of freedom (DoF) ordering in FEniCS.
-
-    Parameters:
-    vec (numpy.ndarray): Input vector of size equal to the number of nodes.
-    nodes (int): Number of nodes in the mesh.
-    vertextodof (numpy.ndarray): Mapping from vertex indices to DoF indices.
-
-    Returns:
-    numpy.ndarray: Reordered vector with values corresponding to DoF ordering.
-    """
-    vec_dof = np.zeros(vec.shape)
-    for i in range(nodes):
-        j = int(vertextodof[i])
-        vec_dof[j] = vec[i]
-    return vec_dof
-
-def reorder_vector_to_dof_time(vec, num_steps, nodes, vertextodof):
+def reorder_vector_to_dof(vec, num_steps, nodes, vertextodof):
     """
     Reorders a time-dependent vector to match the DoF ordering in FEniCS for each time step.
 
@@ -48,7 +29,7 @@ def reorder_vector_to_dof_time(vec, num_steps, nodes, vertextodof):
             vec_dof[n*nodes + j] = temp[i] 
     return vec_dof
 
-def reorder_vector_from_dof_time(vec, num_steps, nodes, vertextodof):
+def reorder_vector_from_dof(vec, num_steps, nodes, vertextodof):
     """
     Reorders a time-dependent vector from the DoF ordering back to the node ordering.
 
@@ -602,8 +583,8 @@ def schnak_sys_IC(a1, a2, deltax, nodes, vertextodof):
     v_init = c_b / pow(c_a + c_b, 2) + con * np.cos(2 * np.pi * (X + Y)) + \
     0.01 * (sum(np.cos(2 * np.pi * X * i) for i in range(1, 9)))                  
     
-    u_init_dof = reorder_vector_to_dof_time(u_init.reshape(nodes), 1, nodes, vertextodof)
-    v_init_dof = reorder_vector_to_dof_time(v_init.reshape(nodes), 1, nodes, vertextodof)
+    u_init_dof = reorder_vector_to_dof(u_init.reshape(nodes), 1, nodes, vertextodof)
+    v_init_dof = reorder_vector_to_dof(v_init.reshape(nodes), 1, nodes, vertextodof)
 
     return u_init_dof, v_init_dof
 
@@ -806,7 +787,7 @@ def nonlinear_equation_IC(a1, a2, deltax, nodes, vertextodof):
     
     kk = 4
     init_cond = 5*Y*(Y-1)*X*(X-1)*np.sin(kk*X*np.pi)
-    init_cond_dof = reorder_vector_to_dof_time(init_cond.reshape(nodes), 1, nodes, vertextodof)
+    init_cond_dof = reorder_vector_to_dof(init_cond.reshape(nodes), 1, nodes, vertextodof)
 
     return init_cond_dof
 
@@ -886,7 +867,7 @@ def solve_nonlinear_equation(control, var1, var2, V, nodes, num_steps, dt, dof_n
                         dof_neighbors, source_mat = Mat_rhs)
         
         if show_plots is True and i % 100 == 0:
-            var1_re = reorder_vector_from_dof_time(var1[start:end],1, nodes, vertextodof)
+            var1_re = reorder_vector_from_dof(var1[start:end],1, nodes, vertextodof)
             plt.imshow(var1_re.reshape((sqnodes,sqnodes)))
             plt.colorbar()
             plt.title(f'Computed state $u$ at t = {round(t,5)}')
@@ -958,9 +939,9 @@ def plot_nonlinear_solution(uk, pk, ck, uhat_T_re, T_data, it, nodes, num_steps,
                             dt, out_folder, vertextodof):
    
     sqnodes = round(np.sqrt(nodes))
-    uk_re = reorder_vector_from_dof_time(uk, num_steps + 1, nodes, vertextodof)
-    ck_re = reorder_vector_from_dof_time(ck, num_steps + 1, nodes, vertextodof)
-    pk_re = reorder_vector_from_dof_time(pk, num_steps + 1, nodes, vertextodof)
+    uk_re = reorder_vector_from_dof(uk, num_steps + 1, nodes, vertextodof)
+    ck_re = reorder_vector_from_dof(ck, num_steps + 1, nodes, vertextodof)
+    pk_re = reorder_vector_from_dof(pk, num_steps + 1, nodes, vertextodof)
     
     for i in range(num_steps):
         startP = i * nodes
@@ -1506,7 +1487,7 @@ def import_data_final(file_path, nodes, vertextodof):
     sqnodes = round(np.sqrt(nodes))
     data = np.genfromtxt(file_path, delimiter=',')
     
-    data_re = reorder_vector_from_dof_time(data, 1, nodes, vertextodof)
+    data_re = reorder_vector_from_dof(data, 1, nodes, vertextodof)
     data_re = data_re.reshape((sqnodes,sqnodes))
     return data_re, data
 
@@ -1556,8 +1537,23 @@ def extract_data(file_path, file_name, T, dt, nodes, vertextodof):
 
     print(f"Extracted data at {T=} into {output_file}.")
 
+def norm_true_control(example, T, dt, M, V):
+    
+    num_steps = round(T / dt)
 
-
+    if example == 'nonlinear':
+        k, l = 2, 2
+        control_fun = df.Expression("sin(k1 * pi * x[0]) * sin(k2 * pi * x[1])",
+            degree=4, pi=np.pi, k1=k, k2=l)
+    
+        # Find L^2-norm of true control over Ω × [0,T]
+        control_vector = df.interpolate(control_fun, V).vector().get_local()
+        control_vector_td = np.tile(control_vector, num_steps + 1)
+        
+    control_norm = L2_norm_sq_Q(control_vector_td, num_steps, dt, M)
+    
+    return control_norm
+    
     
 
 

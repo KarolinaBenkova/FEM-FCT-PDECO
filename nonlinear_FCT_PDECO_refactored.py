@@ -7,14 +7,42 @@ import dolfin as df
 import numpy as np
 import helpers as hp
 
+# ----------------------------------------------------------------------------
+# Script to solve the PDECO problem with nonlinear advection equation
+# -----------------------------------------------------------------=----------
+
+"""
+Solves the PDECO problem below with projected gradient descent method and FCT
+Cost functional:
+J(u,c) = 1/2*||||^2 + beta/2*||c||^2
+(L^2-norms over Ω and Ω × [0,T])
+
+min_{u,c} J(u,c)
+subject to:
+  du/dt + div(-eps * grad(u) + w * u) - u + (1/3) * u^3 = s    in Ω × [0,T]
+                    (-eps * grad(u) + w * u) ⋅ n = 0           on ∂Ω × [0,T]
+                                            u(0) = u0(x)       in Ω
+                                            c in [ca,cb]
+where w is a velocity/wind vector satisfying:
+     div(w) = 0  in Ω × [0,T]
+      w ⋅ n = 0  on ∂Ω × [0,T]
+
+Additional optimality conditions:
+- Adjoint equation, BC and final-time condition
+  -dp/dt + div(-eps * grad(p) + w * p) +u^2 * p - p = 0      in Ωx[0,T]
+                                   dp/dn = 0                 on ∂Ωx[0,T]
+                                    p(T) = \hat{u}_T - u(T)  in Ω
+- Gradient equation:           β * c - p = 0
+"""
+
 # ---------------------------- General Parameters ----------------------------
 a1, a2 = 0, 1
 deltax = 0.025 # Element size
 intervals = round((a2-a1)/deltax)
 
 dt = 0.001
-T = 0.005
-T_data = 0.005
+T = 0.01
+T_data = 0.1
 num_steps = round(T / dt)
 
 show_plots = True # Toggle for visualization
@@ -179,7 +207,6 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
 
     print(f"Stopping criterion: {stop_crit}")
 
-
 # --------------------------- Save results -----------------------------------
 
 # Record the end time of the simulation
@@ -187,6 +214,9 @@ end_time = time.time()
 simulation_duration = end_time - start_time
 
 eval_sim = 1/T * 1/((a2-a1)**2) * hp.L2_norm_sq_Q(ck, num_steps, dt, M)
+
+misfit_norm = hp.L2_norm_sq_Omega(uk[num_steps * nodes:] - uhat_T, M)
+true_control_norm = hp.norm_true_control("nonlinear", T_data, dt, M, V)
 
 uk.tofile(out_folder + f"/Schnak_adv_T{T}_beta{beta}_u.csv", sep = ",")
 ck.tofile(out_folder + f"/Schnak_adv_T{T}_beta{beta}_c.csv", sep = ",")
@@ -215,6 +245,7 @@ with open(csv_file_path, mode="a", newline="") as csv_file:
 
 print(f"\nExit:\nFinal stopping criterion: {stop_crit} \nIterations: {it}")
 print("Solutions saved to:", out_folder)
-print("|u(T) - uhat_T| in L^2(\Omega)^2 :",
-      hp.L2_norm_sq_Omega(uk[num_steps * nodes:] - uhat_T, M))
-print("Averge control in L^2(Q)^2:", eval_sim)
+print("||u(T) - uhat_T|| in L^2(Ω)^2 :", misfit_norm)
+print("Average control in L^2(Q)^2:", eval_sim)
+print(f"Final cost functional value for Ω × [0,{T}]:", cost_fun_new)
+print(f"1/β *||c_true|| in L^2-norm^2 over Ω × [0,{T_data}]:", true_control_norm/beta)
