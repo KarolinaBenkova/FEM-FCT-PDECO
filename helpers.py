@@ -1,8 +1,11 @@
 import dolfin as df
 from dolfin import dx, dot, grad, div, assemble, exp
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 from scipy.sparse import csr_matrix, lil_matrix, triu, tril, spdiags
 from scipy.sparse.linalg import spsolve
+import os
 
 # Contains functions used in all scripts
 
@@ -271,13 +274,20 @@ def row_lump(mat, nodes):
     Applies row lumping to a matrix by summing its rows.
  
     Parameters:
-    mass_mat (scipy.sparse.spmatrix): Input matrix.
+    mass_mat (scipy.sparse.lil_matrix): Input matrix.
     nodes (int): Total number of nodes in the mesh.
  
     Returns:
-    scipy.sparse.dia_matrix: Row-lumped diagonal matrix.
+    scipy.sparse.lil_matrix: Row-lumped diagonal matrix.
     """
-    return spdiags(data=np.transpose(mat.sum(axis=1)),diags=0, m=nodes, n=nodes)
+    
+    lumped_matrix = lil_matrix((nodes, nodes))
+    lumped_matrix.setdiag(mat.sum(axis=1).A1)  
+    
+    ## for csr:
+    # lumped_matrix = spdiags(data=np.transpose(mat.sum(axis=1)),diags=0, m=nodes, n=nodes)
+    return lumped_matrix
+    
 
 def L2_norm_sq_Q(phi, num_steps, dt, M):
     '''
@@ -566,6 +576,60 @@ def armijo_line_search(var1, c, d, var1_target, num_steps, dt, M, c_lower,
     elif example == 'chtxs':
         return s, var1, var2
 
+def schnak_sys_IC(a1, a2, deltax, nodes, vertextodof):
+    """
+    Computes the initial condition for the advective Schnakenberg system on a 2D square mesh grid.
+
+    Parameters:
+        a1 (float): Left endpoint of the spatial domain [a1,a2]x[a1,a2].
+        a2 (float): Right endpoint of the spatial domain [a1,a2]x[a1,a2].
+        deltax (float): Grid spacing in both X and Y directions.
+        vertextodof (numpy.ndarray): Mapping from vertex indices to DoF indices.
+
+    Returns:
+        np.ndarray: 2D array representing the initial condition over the mesh grid.
+    """
+    X = np.arange(a1, a2 + deltax, deltax)
+    Y = np.arange(a1, a2 + deltax, deltax)
+    X, Y = np.meshgrid(X,Y)
+    
+    _, _, c_a, c_b, _, _, _, _ = get_schnak_sys_params()
+
+    con = 0.1
+    u_init = c_a + c_b + con * np.cos(2 * np.pi * (X + Y)) + \
+    0.01 * (sum(np.cos(2 * np.pi * X * i) for i in range(1, 9)))
+
+    v_init = c_b / pow(c_a + c_b, 2) + con * np.cos(2 * np.pi * (X + Y)) + \
+    0.01 * (sum(np.cos(2 * np.pi * X * i) for i in range(1, 9)))                  
+    
+    u_init_dof = reorder_vector_to_dof_time(u_init.reshape(nodes), 1, nodes, vertextodof)
+    v_init_dof = reorder_vector_to_dof_time(v_init.reshape(nodes), 1, nodes, vertextodof)
+
+    return u_init_dof, v_init_dof
+
+def get_schnak_sys_params():
+    """
+    Returns the shared parameters for the advective Schnakenberg state and adjoint equations:
+        du/dt - Du*grad^2(u) + om1*w⋅grad(u) + gamma*(u-u^2v) = gamma*c  in Ωx[0,T]
+        dv/dt - Dv*grad^2(v) + om2*w⋅grad(v) + gamma*(u^2v-b) = 0        in Ωx[0,T]
+        
+    #### TBD: insert adjoint equations for Schnakenberg system in docstring
+        
+    """
+    Du = 1/100
+    Dv = 8.6676
+    c_a = 0.1
+    c_b = 0.9
+    gamma = 230.82
+    omega1 = 100 
+    omega2 = 0.6
+    wind = df.Expression(
+        ('-(x[1]-0.5)*sin(2*pi*t)',
+         '(x[0]-0.5)*sin(2*pi*t)'), 
+        degree = 4, pi = np.pi, t = 0)
+
+    return Du, Dv, c_a, c_b, gamma, omega1, omega2, wind
+
 def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbors):
     """
     Solver for the advective Schnakenberg system
@@ -588,19 +652,13 @@ def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighb
     Returns:
         tuple: Solutions for the state variables var1 and var2.
     """
-    Du = 1/10
-    Dv = 8.6676
-    c_b = 0.9
-    gamma = 230.82
-    omega1 = 100
-    omega2 = 0.6
-    wind = df.Expression(('-(x[1]-0.5)*sin(2*pi*t)','(x[0]-0.5)*sin(2*pi*t)'), degree=4, pi=np.pi, t=0)
+    Du, Dv, c_a, c_b, gamma, omega1, omega2, wind = get_schnak_sys_params()
 
     u = df.TrialFunction(V)
     v = df.TestFunction(V)
-    M = assemble_sparse(u * v * dx)
-    M_lumped = row_lump(M, nodes)
-    Ad = assemble_sparse(dot(grad(u), grad(v)) * dx)
+    M_lil = assemble_sparse_lil(u * v * dx)
+    M_lumped = row_lump(M_lil, nodes)
+    Ad = assemble_sparse_lil(dot(grad(u), grad(v)) * dx)
     
     # Reset variables but keep initial conditions
     var1[nodes :] = np.zeros(num_steps * nodes)
@@ -625,20 +683,110 @@ def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighb
         control_fun = vec_to_function(control[start : end], V)
         
         # Solve for u using FCT (advection-dominated equation)
-        A = assemble_sparse(dot(wind, grad(v)) * u * dx)
-        mat_var1 = -(Du*Ad - omega1*A)
+        A = assemble_sparse_lil(dot(wind, grad(v)) * u * dx)
+        Mat_var1 = lil_matrix(A.shape)
+        Mat_var1[:,:] = -(Du*Ad[:,:] - omega1*A[:,:])
         rhs_var1 = np.asarray(assemble((gamma*(control_fun + var1_n_fun**2 * var2_n_fun))* v * dx))
-        var1[start : end] = FCT_alg(mat_var1, rhs_var1, var1_n, dt, nodes, M, M_lumped, dof_neighbors, source_mat=gamma*M)
+        var1[start : end] = FCT_alg(Mat_var1, rhs_var1, var1_n, dt, nodes, M_lil, 
+                                    M_lumped, dof_neighbors, source_mat=gamma*M_lil)
 
         var1_np1_fun = vec_to_function(var1[start : end], V)
-        M_u2 = assemble_sparse(var1_np1_fun * var1_np1_fun * u * v *dx)
+        M_u2 = assemble_sparse_lil(var1_np1_fun * var1_np1_fun * u * v *dx)
         
         # Solve for v using a direct solver
         rhs_var2 = np.asarray(assemble((gamma*c_b)* v * dx))
-        var2[start : end] = spsolve(M + dt*(Dv*Ad - omega2*A + gamma*M_u2), M@var2_n + dt*rhs_var2) 
+        Mat_var2 = lil_matrix(A.shape)
+        Mat_var2[:,:] = M_lil[:,:] + dt*(Dv*Ad[:,:] - omega2*A[:,:] + gamma*M_u2[:,:])
+        var2[start : end] = spsolve(Mat_var2, M_lil@var2_n + dt*rhs_var2) 
      
     return var1, var2
 
+def solve_adjoint_schnak_system(uk, vk, uhat_T, vhat_T, pk, qk, T, V, W, nodes, num_steps, dt, dof_neighbors):
+    """
+    Solves the adjoint system equation:
+        ### TBD
+    corresponding to the advective Schnakenberg system:
+        du/dt - Du*grad^2(u) + om1*w⋅grad(u) + gamma*(u-u^2v) = gamma*c  in Ωx[0,T]
+        dv/dt - Dv*grad^2(v) + om2*w⋅grad(v) + gamma*(u^2v-b) = 0        in Ωx[0,T]
+                                                du/dn = dv/dn = 0        on ∂Ωx[0,T]
+                                                         u(0) = u0(x)    in Ω
+                                                         v(0) = v0(x)    in Ω
+    where the velocity field satisfies:
+        div(w) = 0   in Ω × [0,T]
+   ### CHECK? w⋅n = 0    on ∂Ω × [0,T]
+
+    Parameters:
+        uk (np.ndarray): The state variable influenced by the control variable.
+        Vk (np.ndarray): The second state variable.
+        uhat_T (np.ndarray): The desired target state for u at the final time T.
+        vhat_T (np.ndarray): The desired target state for v at the final time T.
+        pk (np.ndarray): The adjoint variable, initialized at final time T.
+        qk (np.ndarray): Second adjoint variable, initialized at final time T.
+        T (float): Final time of the simulation.
+        V (FunctionSpace): Finite element function space.
+        W (FunctionSpace): Finite element function space for the velocity vector.
+        nodes (int): Number of spatial nodes in the discretization.
+        num_steps (int): Number of time steps.
+        dt (float): Time step size.
+        dof_neighbors (list): Degrees of freedom neighbors for FCT.
+
+    Returns:
+        np.ndarray: The computed adjoint variable pk at all time steps.
+    """
+    
+    Du, Dv, c_a, c_b, gamma, omega1, omega2, wind = get_schnak_sys_params()
+    
+    u = df.TrialFunction(V)
+    v = df.TestFunction(V)
+    wind_fun = df.Function(W)
+    M_lil = assemble_sparse_lil(u*v*dx)
+    M_lumped = row_lump(M_lil, nodes)
+    Ad = assemble_sparse_lil(dot(grad(u), grad(v)) * dx)
+
+    # Set final-time conditions
+    pk[num_steps * nodes :] = uhat_T - uk[num_steps * nodes :]
+    qk[num_steps * nodes :] = vhat_T - vk[num_steps * nodes :]
+    t = T
+    print('\nSolving adjoint equation...')
+    for i in reversed(range(0, num_steps)): # solve for pk(t_n), qk(t_n)
+        start = i * nodes
+        end = (i + 1) * nodes
+        t -= dt
+        if i % 50 == 0:
+            print('t = ', round(t, 4))
+            
+        q_np1 = qk[end : end + nodes] # qk(t_{n+1})
+        p_np1 = pk[end : end + nodes] # pk(t_{n+1})
+    
+        p_np1_fun = vec_to_function(p_np1, V) 
+        q_np1_fun = vec_to_function(q_np1, V)
+        u_n_fun = vec_to_function(uk[start : end], V)      # uk(t_n)
+        v_n_fun = vec_to_function(vk[start : end], V)      # vk(t_n)
+        
+        wind.t = t
+        wind_fun = df.project(wind, W)
+        
+        # First solve for q, then for p
+        A = assemble_sparse_lil(div(wind_fun*u) * v * dx)
+        M_u2 = assemble_sparse_lil(u_n_fun * u_n_fun * u * v *dx)
+        rhs_q = np.asarray(assemble(gamma * p_np1_fun * u_n_fun**2 * v * dx))
+        Mat_q = lil_matrix(A.shape)
+        Mat_q[:,:] = M_lil[:,:] + dt*(Dv*Ad[:,:] - omega2*A[:,:] + gamma*M_u2[:,:])
+        qk[start:end] = spsolve(Mat_q, M_lil@q_np1 + dt*rhs_q) 
+        
+        q_n_fun = vec_to_function(qk[start:end], V)
+        
+        Mat_p = lil_matrix(A.shape)
+        Mat_p[:,:]  = -Du*Ad[:,:]  + omega1*A[:,:] 
+        M_uv = assemble_sparse_lil(u_n_fun * v_n_fun * u * v *dx)
+        rhs_p = np.asarray(assemble(- 2 * gamma * u_n_fun * v_n_fun * q_n_fun * v * dx))
+        Mat_rhs = lil_matrix(A.shape)
+        Mat_rhs[:,:] = gamma*M_lil[:,:] - 2*gamma*M_uv[:,:]
+        pk[start:end] = FCT_alg(Mat_p, rhs_p, p_np1, dt, nodes, M_lil, M_lumped, 
+                                dof_neighbors, source_mat=Mat_rhs)
+       
+    return pk, qk
+    
 def nonlinear_equation_IC(a1, a2, deltax, nodes, vertextodof):
     """
     Computes the initial condition for a nonlinear equation on a 2D square mesh grid.
@@ -647,6 +795,7 @@ def nonlinear_equation_IC(a1, a2, deltax, nodes, vertextodof):
         a1 (float): Left endpoint of the spatial domain [a1,a2]x[a1,a2].
         a2 (float): Right endpoint of the spatial domain [a1,a2]x[a1,a2].
         deltax (float): Grid spacing in both X and Y directions.
+        vertextodof (numpy.ndarray): Mapping from vertex indices to DoF indices.
 
     Returns:
         np.ndarray: 2D array representing the initial condition over the mesh grid.
@@ -669,16 +818,15 @@ def get_nonlinear_eqns_params():
     """
     eps = 0.0001
     speed = 1
-    k1 = 2
-    k2 = 2
     wind = df.Expression(
         ('speed*2*(x[1]-0.5)*x[0]*(1-x[0])',
          'speed*2*(x[0]-0.5)*x[1]*(1-x[1])'),
         degree=4, speed=speed
     )
-    return eps, speed, k1, k2, wind
+    return eps, speed, wind
 
-def solve_nonlinear_equation(control, var1, var2, V, nodes, num_steps, dt, dof_neighbors):
+def solve_nonlinear_equation(control, var1, var2, V, nodes, num_steps, dt, dof_neighbors,
+                             control_fun=None, show_plots=False, vertextodof=None):
     """
     Solver for the nonlinear equation:
         du/dt + div(-eps*grad(u) + w*u) - u + 1/3*u^3 = c      in Ωx[0,T]
@@ -696,16 +844,17 @@ def solve_nonlinear_equation(control, var1, var2, V, nodes, num_steps, dt, dof_n
         num_steps (int): Number of time steps.
         dt (float): Time step size.
         dof_neighbors (list): Degrees of freedom neighbors for FCT.
-
+        control_fun (df.Expression): Control as a given expression, used to generate target data.
+        
     Returns:
         tuple: Solution for the state variable var1 and None for compatibility 
             with usage in armijo_line_search that requires a tuple.
     """
     
-    eps, speed, k1, k2, wind = get_nonlinear_eqns_params()
-    # source_fun_expr = df.Expression('sin(k1*pi*x[0])*sin(k2*pi*x[1])', degree=4, pi=np.pi, k1=k1, k2=k2)
+    eps, speed, wind = get_nonlinear_eqns_params()
     u = df.TrialFunction(V)
     v = df.TestFunction(V)
+    sqnodes = round(np.sqrt(nodes))
     M_lil = assemble_sparse_lil(u*v*dx)
     M_lumped = row_lump(M_lil, nodes)
     Ad = assemble_sparse_lil(dot(grad(u), grad(v)) * dx)
@@ -716,7 +865,7 @@ def solve_nonlinear_equation(control, var1, var2, V, nodes, num_steps, dt, dof_n
     # Reset variable but keep initial conditions
     var1[nodes:] = np.zeros(num_steps * nodes)
     t = 0
-    print('Solving nonlinear state equation...')
+    print('\nSolving nonlinear state equation...')
     for i in range(1,num_steps + 1):           # Solve for var1(t_{n+1})
         start = i * nodes
         end = (i + 1) * nodes
@@ -726,15 +875,22 @@ def solve_nonlinear_equation(control, var1, var2, V, nodes, num_steps, dt, dof_n
 
         var1_n = var1[start - nodes : start]
         var1_n_fun = vec_to_function(var1_n, V) 
-        control_fun = vec_to_function(control[start : end], V)
-
+        if control_fun is None:
+            control_fun = vec_to_function(control[start : end], V)
+            
         M_u2 = assemble_sparse_lil(var1_n_fun**2 * u * v *dx)
         Mat_rhs = lil_matrix(A.shape)
         Mat_rhs[:,:] = -M_lil[:,:] + 1/3*M_u2[:,:]
         var1_rhs = np.asarray(assemble(control_fun * v *dx))
         var1[start:end] = FCT_alg(Mat_var1, var1_rhs, var1_n, dt, nodes, M_lil, M_lumped, 
                         dof_neighbors, source_mat = Mat_rhs)
-    print(var1)
+        
+        if show_plots is True and i % 100 == 0:
+            var1_re = reorder_vector_from_dof_time(var1[start:end],1, nodes, vertextodof)
+            plt.imshow(var1_re.reshape((sqnodes,sqnodes)))
+            plt.colorbar()
+            plt.title(f'Computed state $u$ at t = {round(t,5)}')
+            plt.show()
     return var1, None
 
 def solve_adjoint_nonlinear_equation(uk, uhat_T, pk, T, V, nodes, num_steps, dt, dof_neighbors):
@@ -766,8 +922,7 @@ def solve_adjoint_nonlinear_equation(uk, uhat_T, pk, T, V, nodes, num_steps, dt,
         np.ndarray: The computed adjoint variable pk at all time steps.
     """
     
-    eps, speed, k1, k2, wind = get_nonlinear_eqns_params()
-    # source_fun_expr = df.Expression('sin(k1*pi*x[0])*sin(k2*pi*x[1])', degree=4, pi=np.pi, k1=k1, k2=k2)
+    eps, speed, wind = get_nonlinear_eqns_params()
     
     u = df.TrialFunction(V)
     v = df.TestFunction(V)
@@ -778,10 +933,10 @@ def solve_adjoint_nonlinear_equation(uk, uhat_T, pk, T, V, nodes, num_steps, dt,
     Mat_p = lil_matrix(A.shape)
     Mat_p[:,] = -A[:,:] - eps * Ad[:,:]
 
-    # Reset variable but keep initial conditions
+    # Set final-time conditions
     pk[num_steps * nodes :] = uhat_T - uk[num_steps * nodes :]
     t = T
-    print('Solving adjoint equation...')
+    print('\nSolving adjoint equation...')
     for i in reversed(range(0, num_steps)):
         start = i * nodes
         end = (i + 1) * nodes
@@ -799,11 +954,104 @@ def solve_adjoint_nonlinear_equation(uk, uhat_T, pk, T, V, nodes, num_steps, dt,
                                 dof_neighbors, source_mat = Mat_rhs)
     return pk
 
+def plot_nonlinear_solution(uk, pk, ck, uhat_T_re, T_data, it, nodes, num_steps, 
+                            dt, out_folder, vertextodof):
+   
+    sqnodes = round(np.sqrt(nodes))
+    uk_re = reorder_vector_from_dof_time(uk, num_steps + 1, nodes, vertextodof)
+    ck_re = reorder_vector_from_dof_time(ck, num_steps + 1, nodes, vertextodof)
+    pk_re = reorder_vector_from_dof_time(pk, num_steps + 1, nodes, vertextodof)
+    
+    for i in range(num_steps):
+        startP = i * nodes
+        endP = (i+1) * nodes
+        tP = i * dt
+        
+        startU = (i+1) * nodes
+        endU = (i+2) * nodes
+        tU = (i+1) * dt
+        
+        u_re = uk_re[startU : endU].reshape((sqnodes,sqnodes))
+        c_re = ck_re[startP : endP].reshape((sqnodes,sqnodes))
+        p_re = pk_re[startP : endP].reshape((sqnodes,sqnodes))
+            
+        if i % 20 == 0 or i == num_steps-1:
+            
+            fig = plt.figure(figsize=(20, 5))
+
+            ax = fig.add_subplot(1, 4, 1)
+            im1 = ax.imshow(uhat_T_re)
+            cb1 = fig.colorbar(im1, ax=ax)
+            ax.set_title(f'{it=}, Desired state for $u$ taken at t={T_data}')
+        
+            ax = fig.add_subplot(1, 4, 2)
+            im2 = ax.imshow(u_re)
+            cb2 = fig.colorbar(im2, ax=ax)
+            ax.set_title(f'Computed state $u$ at t = {round(tU, 5)}')
+        
+            ax = fig.add_subplot(1, 4, 3)
+            im3 = ax.imshow(p_re)
+            cb3 = fig.colorbar(im3, ax=ax)
+            ax.set_title(f'Computed adjoint $p$ at t = {round(tP, 5)}')
+        
+            ax = fig.add_subplot(1, 4, 4)
+            im4 = ax.imshow(c_re)
+            cb4 = fig.colorbar(im4, ax=ax)
+            ax.set_title(f'Computed control $c$ at t = {round(tP, 5)}')
+            
+            fig.tight_layout(pad=3.0)
+            plt.savefig(out_folder + f'/it_{it}_plot_{i:03}.png')
+        
+            # Clear and remove objects explicitly
+            ax.clear()      # Clear axes
+            cb1.remove()    # Remove colorbars
+            cb2.remove()
+            cb3.remove()
+            cb4.remove()
+            del im1, im2, im3, im4, cb1, cb2, cb3, cb4
+            fig.clf()
+            plt.close(fig) 
+
+def plot_progress(cost_fun_vals, cost_fidel_vals, cost_c_vals, it, out_folder):
+
+    fig2 = plt.figure(figsize=(15, 5))
+
+    ax2 = fig2.add_subplot(1, 3, 1)
+    im1 = plt.plot(np.arange(0, it + 2), cost_fun_vals)
+    plt.title(f'{it=} Cost functional')
+    
+    ax2 = fig2.add_subplot(1, 3, 2)
+    im2_u = plt.plot(np.arange(1, it + 2), cost_fidel_vals)
+    plt.title('Data fidelity norms in L2(Omega)^2')
+    
+    ax2 = fig2.add_subplot(1, 3, 3)
+    im3 = plt.plot(np.arange(1, it + 2), cost_c_vals)
+    plt.title('Regularisation norm in L2(Q)^2')
+    
+    fig2.tight_layout(pad=3.0)
+    plt.savefig(out_folder + '/progress_plot.png')
+    
+    # Clear and remove objects explicitly
+    ax2.clear()      # Clear axes
+    del im1, im2_u, im3
+    fig2.clf()
+    plt.close(fig2)
+    
+def get_chtxs_sys_params():
+    """
+    Returns the shared parameters for the chemotaxis state and adjoint equations:
+     TBD insert eqns
+    """
+    delta = 100
+    Dm = 0.05
+    Df = 0.05
+    chi = 0.25
+    gamma = 100
+    return delta, Dm, Df, chi, gamma
+
 def solve_chtxs_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbors):
     """
     Solver for the chemotaxis system
-    du/dt - Du*grad^2(u) + om1*w⋅grad(u) + gamma*(u-u^2v) = gamma*c  in Ω
-    dv/dt - Dv*grad^2(v) + om2*w⋅grad(v) + gamma*(u^2v-b) = 0        in Ω
     dm/dt - Dm*grad^2(m) + div(chi*m*grad(f)) = RHS       in Ωx[0,T]
     df/dt - Df*grad^2(f)) + delta*f = c*m          in Ωx[0,T]
                                             du/dn = dv/dn = 0        on ∂Ωx[0,T]
@@ -823,11 +1071,7 @@ def solve_chtxs_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbo
     Returns:
         tuple: Solutions for the state variables var1 and var2.
     """
-    delta = 100
-    Dm = 0.05
-    Df = 0.05
-    chi = 0.25
-    gamma = 100
+    delta, Dm, Df, chi, gamma = get_chtxs_sys_params()
     
     u = df.TrialFunction(V)
     v = df.TestFunction(V)
@@ -868,6 +1112,82 @@ def solve_chtxs_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbo
         var1[start : end] =  FCT_alg(A_var1, var1_rhs, var1_n, dt, nodes, M_lil, M_lumped, dof_neighbors)
     
     return var1, var2
+
+def solve_adjoint_chtxs_system(mk, fk, mhat_T, fhat_T, pk, qk, T, V, nodes, num_steps, dt, dof_neighbors):
+    """
+    Solves the adjoint system equation:
+        ### TBD
+    corresponding to the chemotaxis system:
+        TBD insert equations
+
+        mk (np.ndarray): The state variable influenced by the control variable.
+        fk (np.ndarray): The second state variable.
+        mhat_T (np.ndarray): The desired target state for u at the final time T.
+        ghat_T (np.ndarray): The desired target state for v at the final time T.
+        pk (np.ndarray): The adjoint variable, initialized at final time T.
+        qk (np.ndarray): Second adjoint variable, initialized at final time T.
+        T (float): Final time of the simulation.
+        V (FunctionSpace): Finite element function space.
+        nodes (int): Number of spatial nodes in the discretization.
+        num_steps (int): Number of time steps.
+        dt (float): Time step size.
+        dof_neighbors (list): Degrees of freedom neighbors for FCT.
+
+    Returns:
+        np.ndarray: The computed adjoint variable pk at all time steps.
+    """
+    
+    Du, Dv, c_a, c_b, gamma, omega1, omega2, wind = get_schnak_sys_params()
+    
+    u = df.TrialFunction(V)
+    v = df.TestFunction(V)
+    M_lil = assemble_sparse_lil(u*v*dx)
+    M_lumped = row_lump(M_lil, nodes)
+    Ad = assemble_sparse_lil(dot(grad(u), grad(v)) * dx)
+
+    # Set final-time conditions
+    pk[num_steps * nodes :] = mhat_T - mk[num_steps * nodes :]
+    qk[num_steps * nodes :] = fhat_T - fk[num_steps * nodes :]
+    # t = T
+    # print('\nSolving adjoint equation...')
+    # for i in reversed(range(0, num_steps)): # solve for pk(t_n), qk(t_n)
+    #     start = i * nodes
+    #     end = (i + 1) * nodes
+    #     t -= dt
+    #     if i % 50 == 0:
+    #         print('t = ', round(t, 4))
+            
+    #     q_np1 = qk[end : end + nodes] # qk(t_{n+1})
+    #     p_np1 = pk[end : end + nodes] # pk(t_{n+1})
+    
+    #     p_np1_fun = vec_to_function(p_np1, V) 
+    #     q_np1_fun = vec_to_function(q_np1, V)
+    #     u_n_fun = vec_to_function(uk[start : end], V)      # uk(t_n)
+    #     v_n_fun = vec_to_function(vk[start : end], V)      # vk(t_n)
+        
+    #     wind.t = t
+    #     wind_fun = df.project(wind, W)
+        
+    #     # First solve for q, then for p
+    #     A = assemble_sparse_lil(div(wind_fun*u) * v * dx)
+    #     M_u2 = assemble_sparse_lil(u_n_fun * u_n_fun * u * v *dx)
+    #     rhs_q = np.asarray(assemble(gamma * p_np1_fun * u_n_fun**2 * v * dx))
+    #     Mat_q = lil_matrix(A.shape)
+    #     Mat_q[:,:] = M_lil[:,:] + dt*(Dv*Ad[:,:] - omega2*A[:,:] + gamma*M_u2[:,:])
+    #     qk[start:end] = spsolve(Mat_q, M_lil@q_np1 + dt*rhs_q) 
+        
+    #     q_n_fun = vec_to_function(qk[start:end], V)
+        
+    #     Mat_p = lil_matrix(A.shape)
+    #     Mat_p[:,:]  = -Du*Ad[:,:]  + omega1*A[:,:] 
+    #     M_uv = assemble_sparse_lil(u_n_fun * v_n_fun * u * v *dx)
+    #     rhs_p = np.asarray(assemble(- 2 * gamma * u_n_fun * v_n_fun * q_n_fun * v * dx))
+    #     Mat_rhs = lil_matrix(A.shape)
+    #     Mat_rhs[:,:] = gamma*M_lil[:,:] - 2*gamma*M_uv[:,:]
+    #     pk[start:end] = FCT_alg(Mat_p, rhs_p, p_np1, dt, nodes, M_lil, M_lumped, 
+    #                             dof_neighbors, source_mat=Mat_rhs)
+       
+    return pk, qk
     
 ### refactored armijo code
 def armijo_line_search_ref(var1, c, d, var1_target, num_steps, dt, c_lower, 
@@ -938,6 +1258,7 @@ def armijo_line_search_ref(var1, c, d, var1_target, num_steps, dt, c_lower,
     armijo = float('inf') 
 
     for k in range(max_iter): 
+        print(f'{k=}')
         c_inc = update_control(c, s, d)
         if w1 is None:
             var1, var2 = nonlinear_solver(c_inc, var1, var2, V, nodes, num_steps, dt, dof_neighbors)
@@ -960,7 +1281,7 @@ def armijo_line_search_ref(var1, c, d, var1_target, num_steps, dt, c_lower,
         
         # Check Armijo stopping condition
         if armijo <= -gam / s * control_dif_L2:
-            print('Converged: Armijo condition satisfied.')
+            print(f'Converged in {k+1} iterations: Armijo condition satisfied.')
             break
 
         s /= 2
@@ -968,7 +1289,7 @@ def armijo_line_search_ref(var1, c, d, var1_target, num_steps, dt, c_lower,
     if armijo > -gam / s * control_dif_L2:
         print(f"Stopped: Maximum iterations ({max_iter}) exceeded.")
 
-    return (s, var1, var2, c_inc) if var2 is not None else (var1, c_inc, k)
+    return (var1, var2, c_inc, k) if var2 is not None else (var1, c_inc, k)
 
 
 # def armijo_line_search_sbr_drift(u, p, c, d, uhatvec, eps, drift, num_steps, dt, nodes, M, M_Lump, Ad, Arot,
@@ -1114,7 +1435,7 @@ def FCT_alg(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, source_mat=None)
         Mat_u_Low[:, :] = M_lumped[:, :] - dt * (A[:, :] + D[:, :])
 
     else:
-        Mat_u_Low[:, :] = D[:, :] - dt * (A[:, :] + D[:, :] - source_mat[:, :])
+        Mat_u_Low[:, :] = M_lumped[:, :] - dt * (A[:, :] + D[:, :] - source_mat[:, :])
 
     rhs_u_Low = M_lumped @ u_n + dt * rhs
     u_Low = spsolve(csr_matrix(Mat_u_Low), rhs_u_Low)
@@ -1175,20 +1496,69 @@ def FCT_alg(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, source_mat=None)
     
     return u_np1
 
-def import_data_final(file_path, file_name, nodes, vertextodof):
-    '''
+def import_data_final(file_path, nodes, vertextodof):
+    """
     Loads the target data: 
         hat{m} if input is "m", or hat{f} if input is "f"
     Size of the loaded array should be sqnodes x sqnodes.
     Output = numpy array sqnodes x sqnodes.
-    '''
+    """
     sqnodes = round(np.sqrt(nodes))
-    data = np.genfromtxt(file_path + file_name + '.csv', delimiter=',')
+    data = np.genfromtxt(file_path, delimiter=',')
     
     data_re = reorder_vector_from_dof_time(data, 1, nodes, vertextodof)
     data_re = data_re.reshape((sqnodes,sqnodes))
     return data_re, data
 
+def extract_data(file_path, file_name, T, dt, nodes, vertextodof):
+    '''
+    Assumes that the solution vector on time interval [0,T] is of length (Nt+1)*Nx 
+    where Nt=number of time steps and Nx=number of nodes, and that the vector is
+    saved as a .csv file in row format.
+    
+    # file_path = "NL_data_eps0.0001_sp1_T2"
+    # file_name = "advection"
+    
+    '''
+    
+    """
+    Extracts the solution vector at a specific time step from a CSV file and 
+    saves it as a new CSV file.
+    
+    The input CSV file contains the solution vector over the time interval [0, T], 
+    with dimensions ((Nt + 1) * Nx), where Nt is the number of time steps and Nx 
+    is the number of spatial nodes. The function extracts the solution at time T 
+    and saves it separately.
+    
+    Parameters:
+        file_path (str): Directory containing the input CSV file.
+        file_name (str): Name of the input CSV file (without extension).
+        T (float): Time at which the solution is extracted.
+        dt (float): Time step size.
+        nodes (int): Number of spatial nodes.
+        vertextodof (array-like): Mapping of mesh vertices to degrees of freedom (not used in function but included for consistency).
+
+    Returns:
+        None: Saves the extracted data as a new CSV file.
+    """
+    
+    idx = round(T / dt)
+    start_col = idx * nodes
+    end_col = (idx+1) * nodes
+    
+    input_file = os.path.join(file_path, f"{file_name}.csv")
+    output_file = os.path.join(file_path, f"{file_name}_T{T}.csv")
+    
+    # Load only the required columns
+    data = pd.read_csv(input_file, header=None, usecols=range(start_col, end_col), nrows=1)
+    
+    np.savetxt(output_file, data.to_numpy().flatten(), delimiter=",")
+
+    print(f"Extracted data at {T=} into {output_file}.")
+
+
+
+    
 
 
 
