@@ -8,7 +8,7 @@ from scipy.sparse.linalg import spsolve
 import os
 
 # Contains functions used in all scripts
-def reorder_vector_to_dof(vec, num_steps, nodes, vertextodof):
+def reorder_vector_to_dof(vec, num_steps, nodes, vertex_to_dof):
     """
     Reorders a time-dependent vector to match the DoF ordering in FEniCS for each time step.
 
@@ -16,7 +16,7 @@ def reorder_vector_to_dof(vec, num_steps, nodes, vertextodof):
     vec (numpy.ndarray): Input vector of size (num_steps * nodes).
     num_steps (int): Number of time steps.
     nodes (int): Number of nodes in the mesh.
-    vertextodof (numpy.ndarray): Mapping from vertex indices to DoF indices.
+    vertex_to_dof (numpy.ndarray): Mapping from vertex indices to DoF indices.
 
     Returns:
     numpy.ndarray: Reordered vector with values corresponding to DoF ordering for all time steps.
@@ -25,11 +25,11 @@ def reorder_vector_to_dof(vec, num_steps, nodes, vertextodof):
     for n in range(num_steps):
         temp = vec[n*nodes:(n+1)*nodes]
         for i in range(nodes):
-            j = int(vertextodof[i])
+            j = int(vertex_to_dof[i])
             vec_dof[n*nodes + j] = temp[i] 
     return vec_dof
 
-def reorder_vector_from_dof(vec, num_steps, nodes, vertextodof):
+def reorder_vector_from_dof(vec, num_steps, nodes, vertex_to_dof):
     """
     Reorders a time-dependent vector from the DoF ordering back to the node ordering.
 
@@ -37,7 +37,7 @@ def reorder_vector_from_dof(vec, num_steps, nodes, vertextodof):
     vec (numpy.ndarray): Input vector of size (num_steps * nodes) in DoF order.
     num_steps (int): Number of time steps.
     nodes (int): Number of nodes in the mesh.
-    vertextodof (numpy.ndarray): Mapping from vertex indices to DoF indices.
+    vertex_to_dof (numpy.ndarray): Mapping from vertex indices to DoF indices.
 
     Returns:
     numpy.ndarray: Reordered vector with values corresponding to the node ordering for all time steps.
@@ -46,7 +46,7 @@ def reorder_vector_from_dof(vec, num_steps, nodes, vertextodof):
     for n in range(num_steps):
         temp = vec[n*nodes:(n+1)*nodes]
         for i in range(nodes):
-            j = int(vertextodof[i])
+            j = int(vertex_to_dof[i])
             vec_dof[n*nodes + i] = temp[j] 
     return vec_dof
 
@@ -193,13 +193,13 @@ def artificial_diffusion_mat(mat):
 
     return D
 
-def generate_boundary_nodes(nodes, vertextodof):
+def generate_boundary_nodes(nodes, vertex_to_dof):
     """
     Identifies boundary nodes in a square domain.
     
     Parameters:
     nodes (int): Total number of nodes in the mesh.
-    vertextodof (numpy.ndarray): Mapping from vertex indices to DoF indices.
+    vertex_to_dof (numpy.ndarray): Mapping from vertex indices to DoF indices.
     
     Returns:
     tuple: (boundary_nodes, boundary_nodes_dof)
@@ -213,18 +213,18 @@ def generate_boundary_nodes(nodes, vertextodof):
         if n % sqnodes in [0, sqnodes - 1] or n < sqnodes or n >= nodes - sqnodes
     ]
     boundary_nodes = np.array(boundary_nodes)
-    boundary_nodes_dof = [int(vertextodof[n]) for n in boundary_nodes]
+    boundary_nodes_dof = [int(vertex_to_dof[n]) for n in boundary_nodes]
         
     return boundary_nodes, boundary_nodes_dof
 
-def find_node_neighbours(mesh, nodes, vertextodof):
+def find_node_neighbours(mesh, nodes, vertex_to_dof):
     """
     Finds neighbors for each node in the mesh.
 
     Parameters:
     mesh (dolfin.Mesh): Computational mesh.
     nodes (int): Total number of nodes in the mesh.
-    vertextodof (numpy.ndarray): Mapping from vertex indices to DoF indices.
+    vertex_to_dof (numpy.ndarray): Mapping from vertex indices to DoF indices.
 
     Returns:
     list of lists: Each entry contains DoF indices of neighbors for a node.
@@ -245,8 +245,8 @@ def find_node_neighbours(mesh, nodes, vertextodof):
     # Convert node_neighbors to dof_neighbors
     dof_neighbors = [[] for _ in range(nodes)]
     for i in range(nodes):
-        j = vertextodof[i]
-        dof_neighbors[j] = [vertextodof[node] for node in node_neighbors[i]]
+        j = vertex_to_dof[i]
+        dof_neighbors[j] = [vertex_to_dof[node] for node in node_neighbors[i]]
     
     return dof_neighbors
 
@@ -269,7 +269,6 @@ def row_lump(mat, nodes):
     # lumped_matrix = spdiags(data=np.transpose(mat.sum(axis=1)),diags=0, m=nodes, n=nodes)
     return lumped_matrix
     
-
 def L2_norm_sq_Q(phi, num_steps, dt, M):
     '''
     Calculates the squared norm in L^2-space of given vector phi using FEM in 
@@ -282,7 +281,7 @@ def L2_norm_sq_Q(phi, num_steps, dt, M):
                          where each phi_i corresponds to a spatial discretization.
     num_steps (int): Number of time steps.
     dt (float): Time step size.
-    M (numpy.ndarray): Mass matrix
+    M (numpy.ndarray): Mass matrix.
 
     Returns:
     float: Squared L^2 norm of phi in spatiotemporal domain Q.
@@ -303,7 +302,7 @@ def L2_norm_sq_Omega(phi, M):
     
     Parameters:
     phi (numpy.ndarray): The vector phi discretized in space of length 'nodes'.
-    M (numpy.ndarray): Mass matrix
+    M (numpy.ndarray): Mass matrix.
 
     Returns:
     float: Squared L^2 norm of phi in spatial domain \Omega.
@@ -557,7 +556,7 @@ def armijo_line_search(var1, c, d, var1_target, num_steps, dt, M, c_lower,
     elif example == 'chtxs':
         return s, var1, var2
 
-def schnak_sys_IC(a1, a2, deltax, nodes, vertextodof):
+def schnak_sys_IC(a1, a2, deltax, nodes, vertex_to_dof):
     """
     Computes the initial condition for the advective Schnakenberg system on a 2D square mesh grid.
 
@@ -565,7 +564,7 @@ def schnak_sys_IC(a1, a2, deltax, nodes, vertextodof):
         a1 (float): Left endpoint of the spatial domain [a1,a2]x[a1,a2].
         a2 (float): Right endpoint of the spatial domain [a1,a2]x[a1,a2].
         deltax (float): Grid spacing in both X and Y directions.
-        vertextodof (numpy.ndarray): Mapping from vertex indices to DoF indices.
+        vertex_to_dof (numpy.ndarray): Mapping from vertex indices to DoF indices.
 
     Returns:
         np.ndarray: 2D array representing the initial condition over the mesh grid.
@@ -583,8 +582,8 @@ def schnak_sys_IC(a1, a2, deltax, nodes, vertextodof):
     v_init = c_b / pow(c_a + c_b, 2) + con * np.cos(2 * np.pi * (X + Y)) + \
     0.01 * (sum(np.cos(2 * np.pi * X * i) for i in range(1, 9)))                  
     
-    u_init_dof = reorder_vector_to_dof(u_init.reshape(nodes), 1, nodes, vertextodof)
-    v_init_dof = reorder_vector_to_dof(v_init.reshape(nodes), 1, nodes, vertextodof)
+    u_init_dof = reorder_vector_to_dof(u_init.reshape(nodes), 1, nodes, vertex_to_dof)
+    v_init_dof = reorder_vector_to_dof(v_init.reshape(nodes), 1, nodes, vertex_to_dof)
 
     return u_init_dof, v_init_dof
 
@@ -597,10 +596,11 @@ def get_schnak_sys_params():
     #### TBD: insert adjoint equations for Schnakenberg system in docstring
         
     """
+    # Setup used in Garzon-Alvarado et al (2011)
     Du = 1/100
     Dv = 8.6676
-    c_a = 0.1
-    c_b = 0.9
+    c_a = 0.1    # Constant 'a' 
+    c_b = 0.9    # Constant 'b'
     gamma = 230.82
     omega1 = 100 
     omega2 = 0.6
@@ -611,14 +611,16 @@ def get_schnak_sys_params():
 
     return Du, Dv, c_a, c_b, gamma, omega1, omega2, wind
 
-def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbors):
+def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbors,
+                        control_fun=None, show_plots=False, vertex_to_dof=None):
     """
     Solver for the advective Schnakenberg system
-        du/dt - Du*grad^2(u) + om1*w⋅grad(u) + gamma*(u-u^2v) = gamma*c  in Ωx[0,T]
-        dv/dt - Dv*grad^2(v) + om2*w⋅grad(v) + gamma*(u^2v-b) = 0        in Ωx[0,T]
-                                                du/dn = dv/dn = 0        on ∂Ωx[0,T]
-                                                         u(0) = u0(x)    in Ω
-                                                         v(0) = v0(x)    in Ω
+    du/dt + div(-Du * grad(u) + ω1 * w * u) + γ(u-u^2v) = γ*a     in Ω × [0,T]
+    dv/dt + div(-Dv * grad(v) + ω2 * w * v) + γ(u^2v-b) = 0       in Ω × [0,T]
+                         (-Du * grad(u) + ω1 * w * u) ⋅ n = 0     on ∂Ω × [0,T]
+                         (-Dv * grad(v) + ω2 * w * v) ⋅ n = 0     on ∂Ω × [0,T]
+                                                   u(0) = u0(x)   in Ω
+                                                   v(0) = v0(x)   in Ω
 
     Parameters:
         c (np.ndarray): Control variable.
@@ -634,9 +636,9 @@ def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighb
         tuple: Solutions for the state variables var1 and var2.
     """
     Du, Dv, c_a, c_b, gamma, omega1, omega2, wind = get_schnak_sys_params()
-
     u = df.TrialFunction(V)
     v = df.TestFunction(V)
+    sqnodes = round(np.sqrt(nodes))
     M_lil = assemble_sparse_lil(u * v * dx)
     M_lumped = row_lump(M_lil, nodes)
     Ad = assemble_sparse_lil(dot(grad(u), grad(v)) * dx)
@@ -661,7 +663,8 @@ def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighb
         # Define previous time-step solution as a function
         var1_n_fun = vec_to_function(var1_n, V)
         var2_n_fun = vec_to_function(var2_n, V)
-        control_fun = vec_to_function(control[start : end], V)
+        if control_fun is None:
+            control_fun = vec_to_function(control[start : end], V)
         
         # Solve for u using FCT (advection-dominated equation)
         A = assemble_sparse_lil(dot(wind, grad(v)) * u * dx)
@@ -672,14 +675,30 @@ def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighb
                                     M_lumped, dof_neighbors, source_mat=gamma*M_lil)
 
         var1_np1_fun = vec_to_function(var1[start : end], V)
-        M_u2 = assemble_sparse_lil(var1_np1_fun * var1_np1_fun * u * v *dx)
+        M_u2 = assemble_sparse_lil(var1_np1_fun **2 * u * v *dx)
         
-        # Solve for v using a direct solver
+        # Solve for v using a direct solver (Dv >> omega2)
         rhs_var2 = np.asarray(assemble((gamma*c_b)* v * dx))
         Mat_var2 = lil_matrix(A.shape)
         Mat_var2[:,:] = M_lil[:,:] + dt*(Dv*Ad[:,:] - omega2*A[:,:] + gamma*M_u2[:,:])
         var2[start : end] = spsolve(Mat_var2, M_lil@var2_n + dt*rhs_var2) 
-     
+        
+        if show_plots is True and i % 100 == 0:
+            var1_re = reorder_vector_from_dof(var1[start:end], 1, nodes, vertex_to_dof)
+            var2_re = reorder_vector_from_dof(var1[start:end], 1, nodes, vertex_to_dof)
+            
+            fig2 = plt.figure(figsize=(10, 5), dpi=100)
+            
+            ax2 = plt.subplot(1,2,1)
+            im1 = plt.imshow(var1_re.reshape((sqnodes,sqnodes)), cmap ="gray")
+            fig2.colorbar(im1)
+            plt.title(f"Computed state $u$ at t={round(t,5)}")
+            
+            ax2 = plt.subplot(1,2,2)
+            im2 = plt.imshow(var2_re.reshape((sqnodes,sqnodes)), cmap="gray")
+            fig2.colorbar(im2)
+            plt.title(f"Computed state $v$ at t={round(t,5)}")
+            plt.show()
     return var1, var2
 
 def solve_adjoint_schnak_system(uk, vk, uhat_T, vhat_T, pk, qk, T, V, W, nodes, num_steps, dt, dof_neighbors):
@@ -768,7 +787,7 @@ def solve_adjoint_schnak_system(uk, vk, uhat_T, vhat_T, pk, qk, T, V, W, nodes, 
        
     return pk, qk
     
-def nonlinear_equation_IC(a1, a2, deltax, nodes, vertextodof):
+def nonlinear_equation_IC(a1, a2, deltax, nodes, vertex_to_dof):
     """
     Computes the initial condition for a nonlinear equation on a 2D square mesh grid.
 
@@ -776,7 +795,7 @@ def nonlinear_equation_IC(a1, a2, deltax, nodes, vertextodof):
         a1 (float): Left endpoint of the spatial domain [a1,a2]x[a1,a2].
         a2 (float): Right endpoint of the spatial domain [a1,a2]x[a1,a2].
         deltax (float): Grid spacing in both X and Y directions.
-        vertextodof (numpy.ndarray): Mapping from vertex indices to DoF indices.
+        vertex_to_dof (numpy.ndarray): Mapping from vertex indices to DoF indices.
 
     Returns:
         np.ndarray: 2D array representing the initial condition over the mesh grid.
@@ -787,7 +806,7 @@ def nonlinear_equation_IC(a1, a2, deltax, nodes, vertextodof):
     
     kk = 4
     init_cond = 5*Y*(Y-1)*X*(X-1)*np.sin(kk*X*np.pi)
-    init_cond_dof = reorder_vector_to_dof(init_cond.reshape(nodes), 1, nodes, vertextodof)
+    init_cond_dof = reorder_vector_to_dof(init_cond.reshape(nodes), 1, nodes, vertex_to_dof)
 
     return init_cond_dof
 
@@ -797,17 +816,15 @@ def get_nonlinear_eqns_params():
         du/dt + div(-eps*grad(u) + w*u) - u + 1/3*u^3 = c   in Ωx[0,T]
         dp/dt + div(-eps*grad(p) + w*p) + u^2*p - p = 0     in Ω × [0,T]
     """
-    eps = 0.0001
-    speed = 1
-    wind = df.Expression(
-        ('speed*2*(x[1]-0.5)*x[0]*(1-x[0])',
-         'speed*2*(x[0]-0.5)*x[1]*(1-x[1])'),
-        degree=4, speed=speed
-    )
+    eps = 1e-4  # Diffusion parameter
+    speed = 1   # Wind speed
+    wind = df.Expression(("speed * 2 * (x[1] - 0.5) * x[0] * (1 - x[0])",
+                         "-speed * 2 * (x[0] - 0.5) * x[1] * (1 - x[1])"),
+                         degree=4, speed=speed)
     return eps, speed, wind
 
 def solve_nonlinear_equation(control, var1, var2, V, nodes, num_steps, dt, dof_neighbors,
-                             control_fun=None, show_plots=False, vertextodof=None):
+                             control_fun=None, show_plots=False, vertex_to_dof=None):
     """
     Solver for the nonlinear equation:
         du/dt + div(-eps*grad(u) + w*u) - u + 1/3*u^3 = c      in Ωx[0,T]
@@ -867,10 +884,10 @@ def solve_nonlinear_equation(control, var1, var2, V, nodes, num_steps, dt, dof_n
                         dof_neighbors, source_mat = Mat_rhs)
         
         if show_plots is True and i % 100 == 0:
-            var1_re = reorder_vector_from_dof(var1[start:end],1, nodes, vertextodof)
+            var1_re = reorder_vector_from_dof(var1[start:end],1, nodes, vertex_to_dof)
             plt.imshow(var1_re.reshape((sqnodes,sqnodes)))
             plt.colorbar()
-            plt.title(f'Computed state $u$ at t = {round(t,5)}')
+            plt.title(f"Computed state $u$ at t = {round(t,5)}")
             plt.show()
     return var1, None
 
@@ -936,12 +953,12 @@ def solve_adjoint_nonlinear_equation(uk, uhat_T, pk, T, V, nodes, num_steps, dt,
     return pk
 
 def plot_nonlinear_solution(uk, pk, ck, uhat_T_re, T_data, it, nodes, num_steps, 
-                            dt, out_folder, vertextodof):
+                            dt, out_folder, vertex_to_dof):
    
     sqnodes = round(np.sqrt(nodes))
-    uk_re = reorder_vector_from_dof(uk, num_steps + 1, nodes, vertextodof)
-    ck_re = reorder_vector_from_dof(ck, num_steps + 1, nodes, vertextodof)
-    pk_re = reorder_vector_from_dof(pk, num_steps + 1, nodes, vertextodof)
+    uk_re = reorder_vector_from_dof(uk, num_steps + 1, nodes, vertex_to_dof)
+    ck_re = reorder_vector_from_dof(ck, num_steps + 1, nodes, vertex_to_dof)
+    pk_re = reorder_vector_from_dof(pk, num_steps + 1, nodes, vertex_to_dof)
     
     for i in range(num_steps):
         startP = i * nodes
@@ -1270,7 +1287,7 @@ def armijo_line_search_ref(var1, c, d, var1_target, num_steps, dt, c_lower,
     if armijo > -gam / s * control_dif_L2:
         print(f"Stopped: Maximum iterations ({max_iter}) exceeded.")
 
-    return (var1, var2, c_inc, k) if var2 is not None else (var1, c_inc, k)
+    return (var1, var2, c_inc, k + 1) if var2 is not None else (var1, c_inc, k + 1)
 
 
 # def armijo_line_search_sbr_drift(u, p, c, d, uhatvec, eps, drift, num_steps, dt, nodes, M, M_Lump, Ad, Arot,
@@ -1477,7 +1494,7 @@ def FCT_alg(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, source_mat=None)
     
     return u_np1
 
-def import_data_final(file_path, nodes, vertextodof):
+def import_data_final(file_path, nodes, vertex_to_dof):
     """
     Loads the target data: 
         hat{m} if input is "m", or hat{f} if input is "f"
@@ -1487,21 +1504,11 @@ def import_data_final(file_path, nodes, vertextodof):
     sqnodes = round(np.sqrt(nodes))
     data = np.genfromtxt(file_path, delimiter=',')
     
-    data_re = reorder_vector_from_dof(data, 1, nodes, vertextodof)
+    data_re = reorder_vector_from_dof(data, 1, nodes, vertex_to_dof)
     data_re = data_re.reshape((sqnodes,sqnodes))
     return data_re, data
 
-def extract_data(file_path, file_name, T, dt, nodes, vertextodof):
-    '''
-    Assumes that the solution vector on time interval [0,T] is of length (Nt+1)*Nx 
-    where Nt=number of time steps and Nx=number of nodes, and that the vector is
-    saved as a .csv file in row format.
-    
-    # file_path = "NL_data_eps0.0001_sp1_T2"
-    # file_name = "advection"
-    
-    '''
-    
+def extract_data(file_path, file_name, T, dt, nodes, vertex_to_dof):
     """
     Extracts the solution vector at a specific time step from a CSV file and 
     saves it as a new CSV file.
@@ -1517,7 +1524,7 @@ def extract_data(file_path, file_name, T, dt, nodes, vertextodof):
         T (float): Time at which the solution is extracted.
         dt (float): Time step size.
         nodes (int): Number of spatial nodes.
-        vertextodof (array-like): Mapping of mesh vertices to degrees of freedom (not used in function but included for consistency).
+        vertex_to_dof (array-like): Mapping of mesh vertices to degrees of freedom (not used in function but included for consistency).
 
     Returns:
         None: Saves the extracted data as a new CSV file.
@@ -1538,7 +1545,20 @@ def extract_data(file_path, file_name, T, dt, nodes, vertextodof):
     print(f"Extracted data at {T=} into {output_file}.")
 
 def norm_true_control(example, T, dt, M, V):
+    """
+    Calculates the squared norm in L^2(Q) of the true control for a given
+    PDECO problem and final time T where Q = Ω × [0,T].
     
+    Parameters:
+    example: {'Schnak','nonlinear','chtxs'} name of the  problem.
+    T (int): Final time.
+    dt (float): Time step size.
+    M (numpy.ndarray): Mass matrix.
+    V (FunctionSpace, optional): Finite element function space.
+
+    Returns:
+    float: Squared L^2-norm of the control in spatiotemporal domain Q.
+    """
     num_steps = round(T / dt)
 
     if example == 'nonlinear':

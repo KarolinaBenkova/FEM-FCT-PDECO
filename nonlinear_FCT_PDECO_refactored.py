@@ -83,7 +83,7 @@ mesh = df.RectangleMesh(df.Point(a1, a1), df.Point(a2, a2), intervals, intervals
 V = df.FunctionSpace(mesh, "CG", 1)
 nodes = V.dim()
 sqnodes = round(np.sqrt(nodes))
-vertextodof = df.vertex_to_dof_map(V)
+vertex_to_dof = df.vertex_to_dof_map(V)
 
 u = df.TrialFunction(V)
 v = df.TestFunction(V)
@@ -92,14 +92,14 @@ M = hp.assemble_sparse(u * v * df.dx) # Mass matrix
 
 # Explicitly create connectivities between vertices to find neighbouring nodes
 mesh.init(0, 1)
-dof_neighbors = hp.find_node_neighbours(mesh, nodes, vertextodof)
+dof_neighbors = hp.find_node_neighbours(mesh, nodes, vertex_to_dof)
 
-u0 = hp.nonlinear_equation_IC(a1, a2, deltax, nodes, vertextodof)
+u0 = hp.nonlinear_equation_IC(a1, a2, deltax, nodes, vertex_to_dof)
 
 if not os.path.exists(target_file):
     hp.extract_data(
-        target_data_path, target_data_file_name, T_data, dt, nodes, vertextodof)
-uhat_T_re, uhat_T = hp.import_data_final(target_file, nodes, vertextodof)
+        target_data_path, target_data_file_name, T_data, dt, nodes, vertex_to_dof)
+uhat_T_re, uhat_T = hp.import_data_final(target_file, nodes, vertex_to_dof)
 
 # ----------------- Initialize gradient descent variables --------------------
 
@@ -197,7 +197,7 @@ while (stop_crit >= tol or fail_pass) and it < 2:#max_iter_GD:
 
     if show_plots is True:
         hp.plot_nonlinear_solution(uk, pk, ck, uhat_T_re, T_data, it,
-                                nodes, num_steps, dt, out_folder, vertextodof)
+                                nodes, num_steps, dt, out_folder, vertex_to_dof)
 
     hp.plot_progress(cost_fun_vals, cost_fidel_vals, cost_c_vals, it, out_folder)
 

@@ -10,8 +10,8 @@ import helpers as hp
 
 """
 Solves the nonlinear advection-reaction-diffusion equation:
-    du/dt + div(-eps * grad(u) + w * u) - u + (1/3) * u^3 = s    in Ω × [0,T]
-                      (-eps * grad(u) + w * u) ⋅ n = 0           on ∂Ω × [0,T]
+    du/dt + div(-ε * grad(u) + w * u) - u + (1/3) * u^3 = s    in Ω × [0,T]
+                      (-ε * grad(u) + w * u) ⋅ n = 0           on ∂Ω × [0,T]
                                               u(0) = u0(x)       in Ω
 and calculates the L^2(Q)-norm of the source function (Q = Ω × [0,T]).                      
 
@@ -19,6 +19,11 @@ where w is a velocity/wind vector satisfying:
      div(w) = 0  in Ω × [0,T]
       w ⋅ n = 0  on ∂Ω × [0,T]
 Note: This leads to Neumann boundary condition: du/dn = 0 on ∂Ω × [0,T].
+Parameters considered:
+ Diffusion parameters: ε = 1e-4
+ Wind field involves a scaling coefficient (wind speed)
+  w = [2 * speed * (y-0.5) * x * (1 - x),  
+       -2 * speed * (x-0.5) * y * (1 - y)]
 """
 
 # ---------------------------- General Parameters ----------------------------
@@ -35,26 +40,14 @@ show_plots = True # Toggle for visualization
 
 # ---------------------------- PDE Coefficients ------------------------------
 
-eps = 1e-4  # Diffusion parameter
-speed = 1   # Wind speed
+eps, speed, wind = hp.get_nonlinear_eqns_params()
+print(f"Diffusion parameter: {eps=} \n Wind speed: {speed=}")
 
 # ----------------------------- Source Function ------------------------------
 
 k, l = 2, 2
 source_fun = df.Expression( "sin(k1 * pi * x[0]) * sin(k2 * pi * x[1])",
     degree=4, pi=np.pi, k1=k, k2=l)
-
-# Find L^2-norm of true control over Ω × [0,T]
-source_vector = df.interpolate(source_fun, V).vector().get_local()
-source_vector_td = np.tile(source_vector, num_steps + 1)
-control_norm = hp.L2_norm_sq_Q(source_vector_td, num_steps, dt, M)
-print(f"L^2-norm of the control over Ω × [0,{T}]:", control_norm)
-
-# ----------------------------- Wind Field -----------------------------------
-
-wind = df.Expression(("speed * 2 * (x[1] - 0.5) * x[0] * (1 - x[0])",
-                     "-speed * 2 * (x[0] - 0.5) * x[1] * (1 - x[1])"),
-                     degree=4, speed=speed)
 
 # ---------------------------- Output File Path ------------------------------
 
@@ -89,6 +82,14 @@ uk[:nodes] = u0
 
 uk, _ = hp.solve_nonlinear_equation(
     z, uk, None, V, nodes, num_steps, dt, dof_neighbors,
-    control_fun=source_fun, show_plots=show_plots, vertextodof=vertex_to_dof)
+    control_fun=source_fun, show_plots=show_plots, vertex_to_dof=vertex_to_dof)
 
 uk.tofile(output_filename, sep=",")
+
+# ------------------  L^2-norm of true control over Ω × [0,T] ----------------
+
+M = hp.assemble_sparse(u * v * df.dx)
+source_vector = df.interpolate(source_fun, V).vector().get_local()
+source_vector_td = np.tile(source_vector, num_steps + 1)
+control_norm = hp.L2_norm_sq_Q(source_vector_td, num_steps, dt, M)
+print(f"L^2-norm of the control over Ω × [0,{T}]:", control_norm)
