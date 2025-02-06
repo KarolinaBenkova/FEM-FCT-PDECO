@@ -42,7 +42,7 @@ intervals = round((a2-a1)/deltax)
 
 dt = 0.001
 T = 0.01
-T_data = 0.1
+T_data = 2
 num_steps = round(T / dt)
 
 show_plots = True # Toggle for visualization
@@ -67,7 +67,7 @@ max_iter_GD = 50
 
 target_data_path = "NL_data_eps0.0001_sp1_T2"
 target_data_file_name = "advection"
-target_file = os.path.join(target_data_path, f"{target_data_file_name}_T{T}.csv")
+target_file = os.path.join(target_data_path, f"{target_data_file_name}_T{T_data}.csv")
 
 out_folder = f"ref_NL_FT_T{T}_Tdata{T_data}beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}"
 if not Path(out_folder).exists():
@@ -98,7 +98,7 @@ u0 = hp.nonlinear_equation_IC(a1, a2, deltax, nodes, vertextodof)
 
 if not os.path.exists(target_file):
     hp.extract_data(
-        target_data_path, target_data_file_name, T, dt, nodes, vertextodof)
+        target_data_path, target_data_file_name, T_data, dt, nodes, vertextodof)
 uhat_T_re, uhat_T = hp.import_data_final(target_file, nodes, vertextodof)
 
 # ----------------- Initialize gradient descent variables --------------------
