@@ -590,11 +590,13 @@ def schnak_sys_IC(a1, a2, deltax, nodes, vertex_to_dof):
 def get_schnak_sys_params():
     """
     Returns the shared parameters for the advective Schnakenberg state and adjoint equations:
-        du/dt - Du*grad^2(u) + om1*w⋅grad(u) + gamma*(u-u^2v) = gamma*c  in Ωx[0,T]
-        dv/dt - Dv*grad^2(v) + om2*w⋅grad(v) + gamma*(u^2v-b) = 0        in Ωx[0,T]
-        
-    #### TBD: insert adjoint equations for Schnakenberg system in docstring
-        
+        du/dt + div(-Du*grad(u) + ω1*w*u) + γ(u-u^2v) = γ*c        in Ω × [0,T]
+        dv/dt + div(-Dv*grad(v) + ω2*w*v) + γ(u^2v-b) = 0          in Ω × [0,T]
+      -dp/dt + div(-Du*grad(p) - ω1*w*p) + γ*p + 2*γ*u*v*(q-p) = 0   in Ωx[0,T]
+              -dq/dt + div(-Dv*grad(q) - ω2*w*q) + γ*u^2*(q-p) = 0   in Ωx[0,T]
+    assuming 
+     div(w) = 0  in Ω × [0,T]
+
     """
     # Setup used in Garzon-Alvarado et al (2011)
     Du = 1/100
@@ -605,9 +607,9 @@ def get_schnak_sys_params():
     omega1 = 100 
     omega2 = 0.6
     wind = df.Expression(
-        ('-(x[1]-0.5)*sin(2*pi*t)',
-         '(x[0]-0.5)*sin(2*pi*t)'), 
-        degree = 4, pi = np.pi, t = 0)
+        ('-(x[1] - 0.5) * sin(2*pi*t)',
+         '(x[0] - 0.5) * sin(2*pi*t)'), 
+         degree=4, pi=np.pi, t=0)
 
     return Du, Dv, c_a, c_b, gamma, omega1, omega2, wind
 
@@ -703,17 +705,22 @@ def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighb
 
 def solve_adjoint_schnak_system(uk, vk, uhat_T, vhat_T, pk, qk, T, V, W, nodes, num_steps, dt, dof_neighbors):
     """
-    Solves the adjoint system equation:
-        ### TBD
+    Solves the adjoint system equations:
+     -dp/dt + div(-Du*grad(p) - ω1*w*p) + γ*p + 2*γ*u*v*(q-p) = 0      in Ωx[0,T]
+             -dq/dt + div(-Dv*grad(q) - ω2*w*q) + γ*u^2*(q-p) = 0      in Ωx[0,T]
+                                                 dp/dn = dq/dn = 0     on ∂Ωx[0,T]
+                                                    p(T) = û_T - u(T)  in Ω
+                                                    q(T) = v̂_T - v(T)  in Ω
+
     corresponding to the advective Schnakenberg system:
-        du/dt - Du*grad^2(u) + om1*w⋅grad(u) + gamma*(u-u^2v) = gamma*c  in Ωx[0,T]
-        dv/dt - Dv*grad^2(v) + om2*w⋅grad(v) + gamma*(u^2v-b) = 0        in Ωx[0,T]
-                                                du/dn = dv/dn = 0        on ∂Ωx[0,T]
-                                                         u(0) = u0(x)    in Ω
-                                                         v(0) = v0(x)    in Ω
+        du/dt + div(-Du*grad(u) + ω1*w*u) + γ(u-u^2v) = γ*c     in Ω × [0,T]
+        dv/dt + div(-Dv*grad(v) + ω2*w*v) + γ(u^2v-b) = 0       in Ω × [0,T]
+                             (-Du*grad(u) + ω1*w*u)⋅n = 0       on ∂Ω × [0,T]
+                             (-Dv*grad(v) + ω2*w*v)⋅n = 0       on ∂Ω × [0,T]
+                                                 u(0) = u0(x)   in Ω
+                                                 v(0) = v0(x)   in Ω
     where the velocity field satisfies:
         div(w) = 0   in Ω × [0,T]
-   ### CHECK? w⋅n = 0    on ∂Ω × [0,T]
 
     Parameters:
         uk (np.ndarray): The state variable influenced by the control variable.
@@ -768,7 +775,7 @@ def solve_adjoint_schnak_system(uk, vk, uhat_T, vhat_T, pk, qk, T, V, W, nodes, 
         
         # First solve for q, then for p
         A = assemble_sparse_lil(div(wind_fun*u) * v * dx)
-        M_u2 = assemble_sparse_lil(u_n_fun * u_n_fun * u * v *dx)
+        M_u2 = assemble_sparse_lil(u_n_fun **2 * u * v *dx)
         rhs_q = np.asarray(assemble(gamma * p_np1_fun * u_n_fun**2 * v * dx))
         Mat_q = lil_matrix(A.shape)
         Mat_q[:,:] = M_lil[:,:] + dt*(Dv*Ad[:,:] - omega2*A[:,:] + gamma*M_u2[:,:])
@@ -779,13 +786,87 @@ def solve_adjoint_schnak_system(uk, vk, uhat_T, vhat_T, pk, qk, T, V, W, nodes, 
         Mat_p = lil_matrix(A.shape)
         Mat_p[:,:]  = -Du*Ad[:,:]  + omega1*A[:,:] 
         M_uv = assemble_sparse_lil(u_n_fun * v_n_fun * u * v *dx)
-        rhs_p = np.asarray(assemble(- 2 * gamma * u_n_fun * v_n_fun * q_n_fun * v * dx))
+        rhs_p = np.asarray(assemble(-2 * gamma * u_n_fun * v_n_fun * q_n_fun * v * dx))
         Mat_rhs = lil_matrix(A.shape)
         Mat_rhs[:,:] = gamma*M_lil[:,:] - 2*gamma*M_uv[:,:]
         pk[start:end] = FCT_alg(Mat_p, rhs_p, p_np1, dt, nodes, M_lil, M_lumped, 
                                 dof_neighbors, source_mat=Mat_rhs)
        
     return pk, qk
+
+def plot_two_var_solution(uk, vk, pk, qk, ck, uhat_T_re, vhat_T_re, T_data, it,
+                          nodes, num_steps, dt, out_folder, vertex_to_dof):
+    
+    sqnodes = round(np.sqrt(nodes))
+    uk_re = reorder_vector_from_dof(uk, num_steps + 1, nodes, vertex_to_dof)
+    vk_re = reorder_vector_from_dof(vk, num_steps + 1, nodes, vertex_to_dof)
+    ck_re = reorder_vector_from_dof(ck, num_steps + 1, nodes, vertex_to_dof)
+    pk_re = reorder_vector_from_dof(pk, num_steps + 1, nodes, vertex_to_dof)
+    qk_re = reorder_vector_from_dof(qk, num_steps + 1, nodes, vertex_to_dof)
+    
+    for i in range(num_steps):
+        startP = i * nodes
+        endP = (i+1) * nodes
+        tP = i * dt
+        
+        startU = (i+1) * nodes
+        endU = (i+2) * nodes
+        tU = (i+1) * dt
+        
+        u_re = uk_re[startU : endU].reshape((sqnodes,sqnodes))
+        v_re = vk_re[startU : endU].reshape((sqnodes,sqnodes))
+        c_re = ck_re[startP : endP].reshape((sqnodes,sqnodes))
+        p_re = pk_re[startP : endP].reshape((sqnodes,sqnodes))
+        q_re = qk_re[startP : endP].reshape((sqnodes,sqnodes))
+            
+        if i % 20 == 0 or i == num_steps-1:
+            
+            fig = plt.figure(figsize=(20, 10))
+
+            ax = fig.add_subplot(2, 4, 1)
+            im1 = ax.imshow(uhat_T_re)
+            cb1 = fig.colorbar(im1, ax=ax)
+            ax.set_title(f'{it=}, Desired state for $u$ at t={T_data}')
+        
+            ax = fig.add_subplot(2, 4, 2)
+            im2 = ax.imshow(u_re)
+            cb2 = fig.colorbar(im2, ax=ax)
+            ax.set_title(f'Computed state $u$ at t={round(tU, 5)}')
+        
+            ax = fig.add_subplot(2, 4, 3)
+            im3 = ax.imshow(p_re)
+            cb3 = fig.colorbar(im3, ax=ax)
+            ax.set_title(f'Computed adjoint $p$ at t={round(tP, 5)}')
+        
+            ax = fig.add_subplot(2, 4, 4)
+            im4 = ax.imshow(c_re)
+            cb4 = fig.colorbar(im4, ax=ax)
+            ax.set_title(f'Computed control $c$ at t={round(tP, 5)}')
+            
+            ax = fig.add_subplot(2, 4, 5)
+            im5 = ax.imshow(vhat_T_re)
+            cb5 = fig.colorbar(im5, ax=ax)
+            ax.set_title(f'{it=}, Desired state for $v$ at t={T_data}')
+        
+            ax = fig.add_subplot(2, 4, 6)
+            im6 = ax.imshow(v_re)
+            cb6 = fig.colorbar(im6, ax=ax)
+            ax.set_title(f'Computed state $v$ at t={round(tU, 5)}')
+        
+            ax = fig.add_subplot(2, 4, 7)
+            im7 = ax.imshow(q_re)
+            cb7 = fig.colorbar(im7, ax=ax)
+            ax.set_title(f'Computed adjoint $q$ at t={round(tP, 5)}')
+        
+            fig.tight_layout(pad=3.0)
+            plt.savefig(out_folder + f'/it_{it}_plot_{i:03}.png')
+        
+            ax.clear()       # Clear axes
+            for cb in [cb1, cb2, cb3, cb4, cb5, cb6, cb7]:
+                cb.remove() # Remove colorbars
+            del im1, im2, im3, im4, im5, im6, im7, cb1, cb2, cb3, cb4, cb5, cb6, cb7
+            fig.clf()
+            plt.close(fig) 
     
 def nonlinear_equation_IC(a1, a2, deltax, nodes, vertex_to_dof):
     """
@@ -985,17 +1066,17 @@ def plot_nonlinear_solution(uk, pk, ck, uhat_T_re, T_data, it, nodes, num_steps,
             ax = fig.add_subplot(1, 4, 2)
             im2 = ax.imshow(u_re)
             cb2 = fig.colorbar(im2, ax=ax)
-            ax.set_title(f'Computed state $u$ at t = {round(tU, 5)}')
+            ax.set_title(f'Computed state $u$ at t={round(tU, 5)}')
         
             ax = fig.add_subplot(1, 4, 3)
             im3 = ax.imshow(p_re)
             cb3 = fig.colorbar(im3, ax=ax)
-            ax.set_title(f'Computed adjoint $p$ at t = {round(tP, 5)}')
+            ax.set_title(f'Computed adjoint $p$ at t={round(tP, 5)}')
         
             ax = fig.add_subplot(1, 4, 4)
             im4 = ax.imshow(c_re)
             cb4 = fig.colorbar(im4, ax=ax)
-            ax.set_title(f'Computed control $c$ at t = {round(tP, 5)}')
+            ax.set_title(f'Computed control $c$ at t={round(tP, 5)}')
             
             fig.tight_layout(pad=3.0)
             plt.savefig(out_folder + f'/it_{it}_plot_{i:03}.png')
@@ -1010,7 +1091,8 @@ def plot_nonlinear_solution(uk, pk, ck, uhat_T_re, T_data, it, nodes, num_steps,
             fig.clf()
             plt.close(fig) 
 
-def plot_progress(cost_fun_vals, cost_fidel_vals, cost_c_vals, it, out_folder):
+def plot_progress(cost_fun_vals, cost_fidel_vals, cost_c_vals, it, out_folder, 
+                  cost_fidel_vals2=None, v1_name=None, v2_name=None):
 
     fig2 = plt.figure(figsize=(15, 5))
 
@@ -1019,7 +1101,10 @@ def plot_progress(cost_fun_vals, cost_fidel_vals, cost_c_vals, it, out_folder):
     plt.title(f'{it=} Cost functional')
     
     ax2 = fig2.add_subplot(1, 3, 2)
-    im2_u = plt.plot(np.arange(1, it + 2), cost_fidel_vals)
+    im2_u = plt.plot(np.arange(1, it + 2), cost_fidel_vals, label=v1_name)
+    if cost_fidel_vals2 is not None:
+        im2_v = plt.plot(np.arange(1, it + 2), cost_fidel_vals2, label=v2_name)
+        plt.legend()
     plt.title('Data fidelity norms in L2(Omega)^2')
     
     ax2 = fig2.add_subplot(1, 3, 3)
@@ -1032,6 +1117,8 @@ def plot_progress(cost_fun_vals, cost_fidel_vals, cost_c_vals, it, out_folder):
     # Clear and remove objects explicitly
     ax2.clear()      # Clear axes
     del im1, im2_u, im3
+    if cost_fidel_vals2 is not None:
+        del im2_v
     fig2.clf()
     plt.close(fig2)
     

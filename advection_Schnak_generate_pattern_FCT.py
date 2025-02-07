@@ -10,12 +10,12 @@ import helpers as hp
 
 """
 Solves the advective Schnakenberg system:
- du/dt + div(-Du * grad(u) + ω1 * w * u) + γ(u-u^2v) = γ*a       in Ω × [0,T]
- dv/dt + div(-Dv * grad(v) + ω2 * w * v) + γ(u^2v-b) = 0         in Ω × [0,T]
-                      (-Du * grad(u) + ω1 * w * u) ⋅ n = 0       on ∂Ω × [0,T]
-                      (-Dv * grad(v) + ω2 * w * v) ⋅ n = 0       on ∂Ω × [0,T]
-                                                   u(0) = u0(x)  in Ω
-                                                   v(0) = v0(x)  in Ω
+  du/dt + div(-Du*grad(u) + ω1*w*u) + γ(u-u^2v) = γ*a     in Ω × [0,T]
+  dv/dt + div(-Dv*grad(v) + ω2*w*v) + γ(u^2v-b) = 0       in Ω × [0,T]
+                       (-Du*grad(u) + ω1*w*u)⋅n = 0       on ∂Ω × [0,T]
+                       (-Dv*grad(v) + ω2*w*v)⋅n = 0       on ∂Ω × [0,T]
+                                           u(0) = u0(x)   in Ω
+                                           v(0) = v0(x)   in Ω
                                       
 and calculates the L^2(Q)-norm of the parameter "a" (Q = Ω × [0,T]).                      
 
@@ -31,7 +31,7 @@ Parameters used in Garzon-Alvarado et al (2011):
 # ---------------------------- General Parameters ----------------------------
 
 a1, a2 = 0, 1
-dx = 0.025 # Element size   ### check: originally used dx=0.02
+dx = 0.025 # Element size
 intervals = round((a2 - a1) / dx)
 
 dt = 0.001
