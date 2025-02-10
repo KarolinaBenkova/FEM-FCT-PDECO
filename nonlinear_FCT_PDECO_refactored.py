@@ -41,11 +41,11 @@ dx = 0.025 # Element size
 intervals = round((a2-a1)/dx)
 
 dt = 0.001
-T = 0.01
-T_data = 2
+T = 0.5
+T_data = 1
 num_steps = round(T / dt)
 
-show_plots = True # Toggle for visualization
+produce_plots = True # Toggle for visualization
 
 # ---------------------------- PDECO parameters ------------------------------
 
@@ -195,7 +195,7 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     cost_c_vals.append(hp.L2_norm_sq_Q(ck, num_steps, dt, M))
     armijo_its.append(iters)
 
-    if show_plots is True:
+    if produce_plots is True:
         hp.plot_nonlinear_solution(uk, pk, ck, uhat_T_re, T_data, it,
                                 nodes, num_steps, dt, out_folder, vertex_to_dof)
 
