@@ -14,29 +14,29 @@ import helpers as hp
 """
 Solves the PDECO problem below with projected gradient descent method and FCT
 Cost functional:
-J(u,v,c) = 1/2*||u(T) - û_T||^2 + 1/2*||v(T) - v̂_T||^2 + beta/2*||c||^2
-(misfit: L^2-norms over Ω,  regularization: L^2-norm over Ω × [0,T])
+J(u,v,c) = 1/2*||u(T) - û_T||² + 1/2*||v(T) - v̂_T||² + β/2*||c||²
+(misfit: L²-norms over Ω,  regularization: L²-norm over Ω × [0,T])
 
 min_{u,v,c} J(u,v,c)
 subject to:
- du/dt + div(-Du*grad(u) + ω1*w*u) + γ(u-u^2v) = γ*c     in Ω × [0,T]
- dv/dt + div(-Dv*grad(v) + ω2*w*v) + γ(u^2v-b) = 0       in Ω × [0,T]
-                      (-Du*grad(u) + ω1*w*u)⋅n = 0       on ∂Ω × [0,T]
-                      (-Dv*grad(v) + ω2*w*v)⋅n = 0       on ∂Ω × [0,T]
-                                          u(0) = u0(x)   in Ω
-                                          v(0) = v0(x)   in Ω
-                                           c in [ca,cb]
+ du/dt + ∇⋅(-Du*∇u + ω1*w*u) + γ(u-u²v) = γ*c     in Ω × [0,T]
+ dv/dt + ∇⋅(-Dv*∇v + ω2*w*v) + γ(u²v-b) = 0       in Ω × [0,T]
+                      (-Du*∇u + ω1*w*u)⋅n = 0       on ∂Ω × [0,T]
+                      (-Dv*∇v + ω2*w*v)⋅n = 0       on ∂Ω × [0,T]
+                                     u(0) = u0(x)   in Ω
+                                     v(0) = v0(x)   in Ω
+                                     c in [ca,cb]
 where w is a velocity/wind vector satisfying:
-     div(w) = 0  in Ω × [0,T]
+  ∇⋅w = 0  in Ω × [0,T]
 
 Additional optimality conditions:
 - Adjoint equations, BCs and final-time conditions
-  -dp/dt + div(-Du*grad(p) - ω1*w*p) + γ*p + 2*γ*u*v*(q-p) = 0      in Ωx[0,T]
-          -dq/dt + div(-Dv*grad(q) - ω2*w*q) + γ*u^2*(q-p) = 0      in Ωx[0,T]
-                                              dp/dn = dq/dn = 0     on ∂Ωx[0,T]
+  -dp/dt + ∇⋅(-Du*∇p - ω1*w*p) + γ*p + 2*γ*u*v*(q-p) = 0      in Ω x [0,T]
+          -dq/dt + ∇⋅(-Dv*∇q - ω2*w*q) + γ*u²*(q-p) = 0      in Ω x [0,T]
+                                         ∇p⋅n = ∇q⋅n = 0     on ∂Ω x [0,T]
                                                  p(T) = û_T - u(T)  in Ω
                                                  q(T) = v̂_T - v(T)  in Ω
-- Gradient equation:  β*c - γ*p = 0
+- Gradient equation:  β*c - γ*p = 0   in Ω x [0,T]
 """
 
 # ---------------------------- General Parameters ----------------------------

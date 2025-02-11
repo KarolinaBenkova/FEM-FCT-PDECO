@@ -14,25 +14,25 @@ import helpers as hp
 """
 Solves the PDECO problem below with projected gradient descent method and FCT
 Cost functional:
-J(u,c) = 1/2*||u(T) - û_T||^2 + beta/2*||c||^2
-(L^2-norms over Ω and Ω × [0,T])
+J(u,c) = 1/2*||u(T) - û_T||² + β/2*||c||²
+(L²-norms over Ω and Ω × [0,T])
 
 min_{u,c} J(u,c)
 subject to:
-  du/dt + div(-eps * grad(u) + w * u) - u + (1/3) * u^3 = c    in Ω × [0,T]
-                    (-eps * grad(u) + w * u) ⋅ n = 0           on ∂Ω × [0,T]
-                                            u(0) = u0(x)       in Ω
-                                            c in [ca,cb]
+  du/dt + ∇⋅(-eps*∇u + w*u) - u + (1/3)*u³ = c      in Ω × [0,T]
+                          (-eps*∇u + w*u)⋅n = 0      on ∂Ω × [0,T]
+                                       u(0) = u0(x)   in Ω
+                                      c in [ca,cb]
 where w is a velocity/wind vector satisfying:
-     div(w) = 0  in Ω × [0,T]
-      w ⋅ n = 0  on ∂Ω × [0,T]
+  ∇⋅w = 0  in Ω × [0,T]
+  w⋅n = 0  on ∂Ω × [0,T]
 
 Additional optimality conditions:
 - Adjoint equation, BC and final-time condition
-  -dp/dt + div(-eps * grad(p) + w * p) +u^2 * p - p = 0      in Ωx[0,T]
-                                   dp/dn = 0                 on ∂Ωx[0,T]
+  -dp/dt + ∇⋅(-eps*∇p + w*p) + u²*p - p = 0          in Ω x [0,T]
+                                    ∇p⋅n = 0          on ∂Ω x [0,T]
                                     p(T) = û_T - u(T)  in Ω
-- Gradient equation:           β * c - p = 0
+- Gradient equation:             β*c - p = 0           in Ω × [0,T]
 """
 
 # ---------------------------- General Parameters ----------------------------
