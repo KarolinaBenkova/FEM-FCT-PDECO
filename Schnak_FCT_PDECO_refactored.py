@@ -50,6 +50,7 @@ T_data = 2
 num_steps = round(T / dt)
 
 produce_plots = True # Toggle for visualization
+optim = "finaltime"
 
 # ---------------------------- PDECO parameters ------------------------------
 
@@ -64,22 +65,22 @@ Du, Dv, true_control, c_b, gamma, omega1, omega2, wind = hp.get_schnak_sys_param
 # --------------------- Gradient descent parameters --------------------------
 
 tol = 1e-4
-max_iter_armijo = 5
+max_iter_armijo = 10
 max_iter_GD = 50
 
 # ----------------------- Input & Output file paths --------------------------
 
-target_data_path = f"AdvSchnak_data_T{T_data}"
+target_data_path = f"AdvSchnak_data_T2"
 target_data_file_name_u = "schnak_u"
 target_data_file_name_v = "schnak_v"
 target_file_u = os.path.join(target_data_path, f"{target_data_file_name_u}_T{T_data}.csv")
 target_file_v = os.path.join(target_data_path, f"{target_data_file_name_v}_T{T_data}.csv")
 
-out_folder = f"ref_Sch_FT_T{T}_Tdata{T_data}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}"
+out_folder = f"ref_Sch_FT_T{T}_Tdata{T_data}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}_Feb10_cinitrand"
 if not Path(out_folder).exists():
     Path(out_folder).mkdir(parents=True)
    
-print(f"dx={dx}, {dt=}, {T=}, {beta=}, {c_lower=}, {c_upper=}")
+print(f"dx={dx}, {dt=}, {T=}, {T_data=}, {beta=}, {c_lower=}, {c_upper=}")
 print(f"{Du=}, {Dv=}, {c_b=}, {gamma=}, {omega1=}, {omega2=}")
 print(f"{tol=}, {max_iter_GD=}, {max_iter_armijo=}")
 
@@ -118,7 +119,9 @@ vhat_T_re, vhat_T = hp.import_data_final(target_file_v, nodes, vertex_to_dof)
 vec_length = (num_steps + 1) * nodes # Include zero and final time
 
 # Initial guess for the control
-ck = np.zeros(vec_length)
+# ck = np.zeros(vec_length)
+rng = np.random.default_rng(seed=5)
+ck = np.clip(rng.random(vec_length), c_lower, c_upper)
 
 # Solve the state equation for the corresponding state
 uk = np.zeros(vec_length)
@@ -136,7 +139,7 @@ pk, qk = hp.solve_adjoint_schnak_system(uk, vk, uhat_T, vhat_T, pk, qk, T, V,
 
 # Calculate initial cost functional
 cost_fun_old = hp.cost_functional(uk, uhat_T, ck, num_steps, dt, M, beta, 
-                               var2=vk, var2_target=vhat_T, optim="finaltime")
+                               optim, var2=vk, var2_target=vhat_T)
 cost_fun_new = (2 + tol) * cost_fun_old
 stop_crit = hp.rel_err(cost_fun_new, cost_fun_old)
 
@@ -164,7 +167,7 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     ## 2. Find optimal stepsize with Armijo line search and calculate uk, ck
     print("Starting Armijo line search...")
     uk, vk, ck, iters = hp.armijo_line_search_ref(uk, ck, dk, uhat_T, num_steps, dt, 
-                       c_lower, c_upper, beta, cost_fun_old, nodes, "finaltime", 
+                       c_lower, c_upper, beta, cost_fun_old, nodes, optim, 
                        V, dof_neighbors=dof_neighbors, var2=vk, var2_target=vhat_T,
                        nonlinear_solver=hp.solve_schnak_system, max_iter=max_iter_armijo)
       
@@ -175,6 +178,15 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     if iters == max_iter_armijo:
         fail_count += 1
         fail_pass = True
+        if it == 0:
+            # Save the current solution as the last best solution
+            u_backup = uk
+            v_backup = vk
+            p_backup = pk
+            q_backup = qk
+            c_backup = ck
+            it_backup = it
+            
         if fail_count == 3:
             # end while loop, assume we have found the most optimal solution
             print("Maximum number of failed Armijo line search iterations reached. Exiting...")
@@ -200,7 +212,7 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     
     ## 4. Calculate metrics
     cost_fun_new = hp.cost_functional(uk, uhat_T, ck, num_steps, dt, M, beta, 
-                                   var2=vk, var2_target=vhat_T, optim="finaltime")
+                                   optim, var2=vk, var2_target=vhat_T)
     stop_crit = hp.rel_err(cost_fun_new, cost_fun_old)
     eval_sim = 1/T * 1/((a2-a1)**2) * hp.L2_norm_sq_Q(ck, num_steps, dt, M)
    
@@ -209,11 +221,10 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
    
     cost_fun_vals.append(cost_fun_new)
     cost_fidel_vals_u.append(hp.L2_norm_sq_Omega(uk[num_steps*nodes:] - uhat_T, M))
-    cost_fidel_vals_v.append(hp.L2_norm_sq_Omega(uk[num_steps*nodes:] - uhat_T, M))
+    cost_fidel_vals_v.append(hp.L2_norm_sq_Omega(vk[num_steps*nodes:] - vhat_T, M))
     cost_c_vals.append(hp.L2_norm_sq_Q(ck, num_steps, dt, M))
-    
-    #### TBD: create plotting functions in helpers
-    
+    armijo_its.append(iters)
+
     if produce_plots is True:
         hp.plot_two_var_solution(
             uk, vk, pk, qk, ck, uhat_T_re, vhat_T_re, T_data, it, nodes, 
@@ -235,7 +246,7 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
 end_time = time.time()
 simulation_duration = end_time - start_time
 
-if fail_count == 3  or fail_restart_count == 5 or (it == max_iter_GD and fail_count > 0):
+if fail_count == 3 or fail_restart_count == 5 or (it == max_iter_GD and fail_count > 0):
     print(f"Restoring the solutions from iteration {it_backup}")
     uk = u_backup
     vk = v_backup
@@ -287,3 +298,14 @@ print("||v(T) - v̂_T|| in L^2(Ω)^2 :", misfit_norm_v)
 print("Average control in L^2(Q)^2:", eval_sim)
 print(f"Final cost functional value for Ω × [0,{T}]:", cost_fun_new)
 print(f"1/β *||c_true|| in L^2-norm^2 over Ω × [0,{T_data}]:", true_control_norm/beta)
+print("Control mean at t=T:", np.mean(ck[num_steps*nodes:]))
+
+import matplotlib.pyplot as plt
+mean_ck = []
+for i in range(num_steps):
+    start = i * nodes
+    end = (i+1) * nodes
+    mean_ck.append(np.mean(ck[start:end]))
+plt.plot(mean_ck)
+plt.title("Mean of the control over domain at each time step")
+plt.show()
