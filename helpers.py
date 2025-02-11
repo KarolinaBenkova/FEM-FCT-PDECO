@@ -114,7 +114,7 @@ def ChebSI(vec, M, Md, cheb_iter, lmin, lmax):
     Parameters:
     vec (numpy.ndarray): Right-hand side vector (b in Ax = b).
     M (scipy.sparse.spmatrix): System matrix (M in Mx = b).
-    Md (numpy.ndarray): Diagonal preconditioner or approximation to M"s diagonal.
+    Md (numpy.ndarray): Diagonal preconditioner or approximation to M's diagonal.
     cheb_iter (int): Number of Chebyshev iterations.
     lmin (float): Minimum eigenvalue estimate of M.
     lmax (float): Maximum eigenvalue estimate of M.
@@ -1108,7 +1108,8 @@ def plot_progress(cost_fun_vals, cost_fidel_vals, cost_c_vals, it, out_folder,
     im2_u = plt.plot(np.arange(1, it + 2), cost_fidel_vals, label=v1_name)
     if cost_fidel_vals2 is not None:
         im2_v = plt.plot(np.arange(1, it + 2), cost_fidel_vals2, label=v2_name)
-        plt.legend()
+        if v2_name is not None:
+            plt.legend()
     plt.title("Data fidelity norms in L2(Omega)^2")
     
     ax2 = fig2.add_subplot(1, 3, 3)
@@ -1376,7 +1377,7 @@ def armijo_line_search_ref(var1, c, d, var1_target, num_steps, dt, c_lower,
         s /= 2
 
     if armijo > -gam / s * control_dif_L2:
-        print(f"Stopped: Maximum iterations ({max_iter}) exceeded.")
+        print(f"Stopped: Maximum number of iterations reached ({max_iter}) .")
 
     return (var1, var2, c_inc, k + 1) if var2 is not None else (var1, c_inc, k + 1)
 

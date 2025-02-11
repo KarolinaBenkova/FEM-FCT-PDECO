@@ -46,6 +46,7 @@ T_data = 1
 num_steps = round(T / dt)
 
 produce_plots = True # Toggle for visualization
+optim = "finaltime"  # Optimization type
 
 # ---------------------------- PDECO parameters ------------------------------
 
@@ -73,7 +74,7 @@ out_folder = f"ref_NL_FT_T{T}_Tdata{T_data}beta{beta}_Ca{c_lower}_Cb{c_upper}_to
 if not Path(out_folder).exists():
     Path(out_folder).mkdir(parents=True)
    
-print(f"dx={dx}, {dt=}, {T=}, {beta=}, {c_lower=}, {c_upper=}")
+print(f"dx={dx}, {dt=}, {T=}, {T_data=}, {beta=}, {c_lower=}, {c_upper=}")
 print(f"{eps=}, {speed=}")
 print(f"{tol=}, {max_iter_GD=}, {max_iter_armijo=}")
 
@@ -121,7 +122,7 @@ pk = hp.solve_adjoint_nonlinear_equation(
 
 # Calculate initial cost functional
 cost_fun_old = hp.cost_functional(
-    uk, uhat_T, ck, num_steps, dt, M, beta, optim="finaltime")
+    uk, uhat_T, ck, num_steps, dt, M, beta, optim)
 cost_fun_new = (2 + tol) * cost_fun_old
 stop_crit = hp.rel_err(cost_fun_new, cost_fun_old)
 
@@ -150,7 +151,7 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     print("Starting Armijo line search...")
     uk, ck, iters = hp.armijo_line_search_ref(
         uk, ck, dk, uhat_T, num_steps, dt, c_lower, c_upper, beta, cost_fun_old,
-        nodes, "finaltime", V, dof_neighbors=dof_neighbors,
+        nodes, optim, V, dof_neighbors=dof_neighbors,
         nonlinear_solver=hp.solve_nonlinear_equation, max_iter=max_iter_armijo)
     
     ## 3. Solve the adjoint equation using new uk
@@ -160,6 +161,13 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     if iters == max_iter_armijo:
         fail_count += 1
         fail_pass = True
+        if it == 0:
+            # Save the current solution as the last best solution
+            u_backup = uk
+            p_backup = pk
+            c_backup = ck
+            it_backup = it
+            
         if fail_count == 3:
             # end while loop, assume we have found the most optimal solution
             print("Maximum number of failed Armijo line search iterations reached. Exiting...")
@@ -183,7 +191,7 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
 
     ## 4. Calculate metrics
     cost_fun_new = hp.cost_functional(uk, uhat_T, ck, num_steps, dt, M, beta,
-                           optim="finaltime")
+                           optim)
     stop_crit = hp.rel_err(cost_fun_new, cost_fun_old)
     eval_sim = 1/T * 1/((a2-a1)**2) * hp.L2_norm_sq_Q(ck, num_steps, dt, M)
 
@@ -214,7 +222,7 @@ end_time = time.time()
 simulation_duration = end_time - start_time
 
 if fail_count == 3  or fail_restart_count == 5 or (it == max_iter_GD and fail_count > 0):
-    print(f'Restoring the solutions from iteration {it_backup}')
+    print(f"Restoring the solutions from iteration {it_backup}")
     uk = u_backup
     pk = p_backup
     ck = c_backup
