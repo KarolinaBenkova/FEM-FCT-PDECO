@@ -619,7 +619,7 @@ def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighb
                         control_fun=None, show_plots=False, vertex_to_dof=None):
     """
     Solver for the advective Schnakenberg system
-    du/dt + div(-Du * grad(u) + ω1 * w * u) + γ(u-u^2v) = γ*a     in Ω × [0,T]
+    du/dt + div(-Du * grad(u) + ω1 * w * u) + γ(u-u^2v) = γ*c     in Ω × [0,T]
     dv/dt + div(-Dv * grad(v) + ω2 * w * v) + γ(u^2v-b) = 0       in Ω × [0,T]
                          (-Du * grad(u) + ω1 * w * u) ⋅ n = 0     on ∂Ω × [0,T]
                          (-Dv * grad(v) + ω2 * w * v) ⋅ n = 0     on ∂Ω × [0,T]
@@ -915,7 +915,7 @@ def solve_nonlinear_equation(control, var1, var2, V, nodes, num_steps, dt, dof_n
           w⋅n = 0      on ∂Ωx[0,T]                                             
           
     Parameters:
-        c (np.ndarray): Control variable.
+        control (np.ndarray): Control variable.
         var1 (np.ndarray): The state variable influenced by the control variable.
         var2 (np.ndarray): Placeholder for a second state variable.
         V (FunctionSpace, optional): Finite element function space.
@@ -961,10 +961,8 @@ def solve_nonlinear_equation(control, var1, var2, V, nodes, num_steps, dt, dof_n
         Mat_rhs = lil_matrix(A.shape)
         Mat_rhs[:,:] = -M[:,:] + 1/3*M_u2[:,:]
         var1_rhs = np.asarray(assemble(control_fun * v *dx))
-        var1[start:end] = FCT_alg(Mat_var1, var1_rhs, var1_n, dt, nodes, M, M_lumped, 
-                        dof_neighbors, source_mat = Mat_rhs)
-        # var1[start:end] = FCT_alg_ref(-Mat_var1, var1_rhs, var1_n, dt, nodes, M, M_lumped, 
-        #                 dof_neighbors, non_flux_mat = Mat_rhs)
+        var1[start:end] = FCT_alg_ref(-Mat_var1, var1_rhs, var1_n, dt, nodes, M, M_lumped, 
+                        dof_neighbors, non_flux_mat = Mat_rhs)
         
         if show_plots is True and i % 100 == 0:
             var1_re = reorder_vector_from_dof(var1[start:end],1, nodes, vertex_to_dof)
@@ -1031,10 +1029,8 @@ def solve_adjoint_nonlinear_equation(uk, uhat_T, pk, T, V, nodes, num_steps, dt,
         Mat_rhs = lil_matrix(A.shape)
         Mat_rhs[:,:] = M_u2[:,:] - M[:,:] 
         p_rhs = np.zeros(nodes)
-        pk[start:end] = FCT_alg(Mat_p, p_rhs, pk_np1, dt, nodes, M, M_lumped, 
-                                dof_neighbors, source_mat = Mat_rhs)
-        # pk[start:end] = FCT_alg_ref(-Mat_p, p_rhs, pk_np1, dt, nodes, M, M_lumped, 
-        #                         dof_neighbors, non_flux_mat = Mat_rhs)
+        pk[start:end] = FCT_alg_ref(-Mat_p, p_rhs, pk_np1, dt, nodes, M, M_lumped, 
+                                dof_neighbors, non_flux_mat = Mat_rhs)
     return pk
 
 def plot_nonlinear_solution(uk, pk, ck, uhat_T_re, T_data, it, nodes, num_steps, 
@@ -1130,26 +1126,60 @@ def plot_progress(cost_fun_vals, cost_fidel_vals, cost_c_vals, it, out_folder,
 def get_chtxs_sys_params():
     """
     Returns the shared parameters for the chemotaxis state and adjoint equations:
-     TBD insert eqns
+     du/dt + ∇⋅(-Dm*∇u + χ*u*exp(-ηu)*∇v) = 0                  in Ω × [0,T]
+                 dv/dt + ∇⋅(-Dv*∇v) + δ*f = γ*u                 in Ω × [0,T]
+    -dp/dt + ∇⋅(-Dm*∇p) - χ*(1 - η*u)*exp(-ηu)*∇p⋅∇v = γ*q     in Ω x [0,T]
+         -dq/dt + ∇⋅(-Df*∇q + χ*u*exp(-ηu)*∇p) + δ*q = 0        in Ω x [0,T]
     """
     delta = 100
     Dm = 0.05
     Df = 0.05
     chi = 0.25
-    gamma = 100
-    return delta, Dm, Df, chi, gamma
+    gamma = 100  # The control parameter
+    eta = 0.5
+    return delta, Dm, Df, chi, gamma, eta
+
+def chtxs_sys_IC(a1, a2, deltax, nodes, vertex_to_dof):
+    """
+    Computes the initial condition for the chemotaxis system on a 2D square mesh grid.
+    We get m(0)=f(0)
+
+    Parameters:
+        a1 (float): Left endpoint of the spatial domain [a1,a2]x[a1,a2].
+        a2 (float): Right endpoint of the spatial domain [a1,a2]x[a1,a2].
+        deltax (float): Grid spacing in both X and Y directions.
+        vertex_to_dof (numpy.ndarray): Mapping from vertex indices to DoF indices.
+
+    Returns:
+        np.ndarray: flattened 2D array representing the initial condition over the mesh grid.
+    """
+    X = np.arange(a1, a2 + deltax, deltax)
+    Y = np.arange(a1, a2 + deltax, deltax)
+    X, Y = np.meshgrid(X,Y)
+    
+    delta, Dm, Df, chi, gamma, eta = get_chtxs_sys_params()
+    sqnodes = round(np.sqrt(nodes))
+
+    m_init = 1.5 + 0.1*(0.5 - np.random.rand(sqnodes,sqnodes))
+    
+    m_init_dof = reorder_vector_to_dof(
+        m_init.reshape(nodes), 1, nodes, vertex_to_dof)
+    f_init_dof = m_init_dof
+
+    return m_init_dof, f_init_dof
 
 def solve_chtxs_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbors):
     """
     Solver for the chemotaxis system
-    dm/dt - Dm*grad^2(m) + div(chi*m*grad(f)) = RHS       in Ωx[0,T]
-    df/dt - Df*grad^2(f)) + delta*f = c*m          in Ωx[0,T]
-                                            du/dn = dv/dn = 0        on ∂Ωx[0,T]
-                                                     u(0) = u0(x)    in Ω
-                                                     v(0) = v0(x)    in Ω
+    du/dt + ∇⋅(-Dm*∇u + χ*u*exp(-ηu)*∇v) = 0      in Ω × [0,T]
+                dv/dt + ∇⋅(-Dv*∇v) + δ*f = c*u    in Ω × [0,T]
+            (-Df*∇u + χ*u*exp(-ηu)*∇v)⋅n = 0      on ∂Ω × [0,T]
+                                   ∇v⋅n = 0       on ∂Ω × [0,T]
+                                   u(0) = u0(x)    in Ω
+                                   v(0) = v0(x)    in Ω
 
     Parameters:
-        c (np.ndarray): Control variable.
+        control (np.ndarray): Control variable.
         var1 (np.ndarray): The state variable u.
         var2 (np.ndarray): The second state variable, v, influenced by the control variable.
         V (FunctionSpace, optional): Finite element function space.
@@ -1161,7 +1191,7 @@ def solve_chtxs_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbo
     Returns:
         tuple: Solutions for the state variables var1 and var2.
     """
-    delta, Dm, Df, chi, gamma = get_chtxs_sys_params()
+    delta, Dm, Df, chi, _, eta = get_chtxs_sys_params()
     
     u = df.TrialFunction(V)
     v = df.TestFunction(V)
@@ -1188,34 +1218,46 @@ def solve_chtxs_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbo
         var2_n_fun = vec_to_function(var2[start - nodes : start], V)
         control_fun = vec_to_function(control[start : end], V)
            
-        var2_rhs = np.asarray(assemble(var2_n_fun * v * dx  + dt * control_fun * var1_n_fun * v * dx))
+        var2_rhs = np.asarray(assemble(
+            var2_n_fun * v * dx  + dt * control_fun * var1_n_fun * v * dx))
     
         var2[start : end] = spsolve(Mat_var2, var2_rhs)
             
         var2_np1_fun = vec_to_function(var2[start : end], V)
     
-        beta = 0.5
-        Aa = assemble_sparse(exp(-beta*var1_n_fun)*dot(grad(var2_np1_fun), grad(v)) * u * dx)
-        A_var1 = - Dm * Ad + chi*Aa
+        Aa = assemble_sparse(
+            exp(-eta*var1_n_fun)*dot(grad(var2_np1_fun), grad(v)) * u * dx)
+        A_var1 = Dm * Ad - chi*Aa
         var1_rhs = np.zeros(nodes)
     
-        var1[start : end] =  FCT_alg(A_var1, var1_rhs, var1_n, dt, nodes, M_lil, M_lumped, dof_neighbors)
+        var1[start : end] = FCT_alg_ref(
+            A_var1, var1_rhs, var1_n, dt, nodes, M_lil, M_lumped, dof_neighbors)
     
     return var1, var2
 
-def solve_adjoint_chtxs_system(mk, fk, mhat_T, fhat_T, pk, qk, T, V, nodes, num_steps, dt, dof_neighbors):
+def solve_adjoint_chtxs_system(uk, vk, uhat_T, vhat_T, pk, qk, control, T, V, nodes, num_steps, dt, dof_neighbors):
     """
     Solves the adjoint system equation:
-        ### TBD
+       -dp/dt + ∇⋅(-Dm*∇p) - χ*(1 - η*u)*exp(-ηu)*∇p⋅∇v = c*q        in Ω x [0,T]
+            -dq/dt + ∇⋅(-Df*∇q + χ*u*exp(-ηu)*∇p) + δ*q = 0          in Ω x [0,T]
+                                            ∇p⋅n = ∇q⋅n = 0          on ∂Ω x [0,T]
+                                                    p(T) = û_T - u(T)  in Ω
+                                                    q(T) = v̂_T - v(T)  in Ω
     corresponding to the chemotaxis system:
-        TBD insert equations
+        du/dt + ∇⋅(-Dm*∇u + χ*u*exp(-ηu)*∇v) = 0      in Ω × [0,T]
+                    dv/dt + ∇⋅(-Dv*∇v) + δ*f = c*u    in Ω × [0,T]
+                (-Df*∇u + χ*u*exp(-ηu)*∇v)⋅n = 0      on ∂Ω × [0,T]
+                                       ∇v⋅n = 0       on ∂Ω × [0,T]
+                                       u(0) = u0(x)    in Ω
+                                       v(0) = v0(x)    in Ω
 
-        mk (np.ndarray): The state variable influenced by the control variable.
-        fk (np.ndarray): The second state variable.
-        mhat_T (np.ndarray): The desired target state for u at the final time T.
-        ghat_T (np.ndarray): The desired target state for v at the final time T.
+        uk (np.ndarray): The state variable influenced by the control variable.
+        vk (np.ndarray): The second state variable.
+        uhat_T (np.ndarray): The desired target state for u at the final time T.
+        vhat_T (np.ndarray): The desired target state for v at the final time T.
         pk (np.ndarray): The adjoint variable, initialized at final time T.
         qk (np.ndarray): Second adjoint variable, initialized at final time T.
+        control (np.ndarray): Control variable.
         T (float): Final time of the simulation.
         V (FunctionSpace): Finite element function space.
         nodes (int): Number of spatial nodes in the discretization.
@@ -1227,55 +1269,53 @@ def solve_adjoint_chtxs_system(mk, fk, mhat_T, fhat_T, pk, qk, T, V, nodes, num_
         np.ndarray: The computed adjoint variable pk at all time steps.
     """
     
-    Du, Dv, c_a, c_b, gamma, omega1, omega2, wind = get_schnak_sys_params()
+    delta, Dm, Df, chi, _, eta = get_chtxs_sys_params()
     
     u = df.TrialFunction(V)
     v = df.TestFunction(V)
-    M_lil = assemble_sparse_lil(u*v*dx)
-    M_lumped = row_lump(M_lil, nodes)
+    M = assemble_sparse_lil(u*v*dx)
+    M_lumped = row_lump(M, nodes)
     Ad = assemble_sparse_lil(dot(grad(u), grad(v)) * dx)
 
     # Set final-time conditions
-    pk[num_steps * nodes :] = mhat_T - mk[num_steps * nodes :]
-    qk[num_steps * nodes :] = fhat_T - fk[num_steps * nodes :]
-    # t = T
-    # print("\nSolving adjoint equation...")
-    # for i in reversed(range(0, num_steps)): # solve for pk(t_n), qk(t_n)
-    #     start = i * nodes
-    #     end = (i + 1) * nodes
-    #     t -= dt
-    #     if i % 50 == 0:
-    #         print("t = ", round(t, 4))
+    pk[num_steps * nodes :] = uhat_T - uk[num_steps * nodes :]
+    qk[num_steps * nodes :] = vhat_T - vk[num_steps * nodes :]
+    t = T
+    print("\nSolving adjoint equation...")
+    for i in reversed(range(0, num_steps)): # solve for pk(t_n), qk(t_n)
+        start = i * nodes
+        end = (i + 1) * nodes
+        t -= dt
+        if i % 50 == 0:
+            print("t = ", round(t, 4))
             
-    #     q_np1 = qk[end : end + nodes] # qk(t_{n+1})
-    #     p_np1 = pk[end : end + nodes] # pk(t_{n+1})
+        q_np1 = qk[end : end + nodes] # qk(t_{n+1})
+        p_np1 = pk[end : end + nodes] # pk(t_{n+1})
     
-    #     p_np1_fun = vec_to_function(p_np1, V) 
-    #     q_np1_fun = vec_to_function(q_np1, V)
-    #     u_n_fun = vec_to_function(uk[start : end], V)      # uk(t_n)
-    #     v_n_fun = vec_to_function(vk[start : end], V)      # vk(t_n)
+        p_np1_fun = vec_to_function(p_np1, V) 
+        q_np1_fun = vec_to_function(q_np1, V)
+        u_n_fun = vec_to_function(uk[start : end], V)      # uk(t_n)
+        v_n_fun = vec_to_function(vk[start : end], V)      # vk(t_n)
+        control_fun = vec_to_function(control[start : end], V) # ck(t_n)
         
-    #     wind.t = t
-    #     wind_fun = df.project(wind, W)
+        # First solve for q, then for p ???
         
-    #     # First solve for q, then for p
-    #     A = assemble_sparse_lil(div(wind_fun*u) * v * dx)
-    #     M_u2 = assemble_sparse_lil(u_n_fun * u_n_fun * u * v *dx)
-    #     rhs_q = np.asarray(assemble(gamma * p_np1_fun * u_n_fun**2 * v * dx))
-    #     Mat_q = lil_matrix(A.shape)
-    #     Mat_q[:,:] = M_lil[:,:] + dt*(Dv*Ad[:,:] - omega2*A[:,:] + gamma*M_u2[:,:])
-    #     qk[start:end] = spsolve(Mat_q, M_lil@q_np1 + dt*rhs_q) 
         
-    #     q_n_fun = vec_to_function(qk[start:end], V)
+        rhs_q = np.asarray(assemble(q_np1_fun * v * dx + 
+                    dt * div( chi*u_n_fun*exp(-eta*u_n_fun) * grad(p_np1_fun)) *v*dx))
+        Mat_q = M + dt*(Df*Ad + delta*M)
+        qk[start:end] = spsolve(Mat_q, M@q_np1 + dt*rhs_q) 
         
-    #     Mat_p = lil_matrix(A.shape)
-    #     Mat_p[:,:]  = -Du*Ad[:,:]  + omega1*A[:,:] 
-    #     M_uv = assemble_sparse_lil(u_n_fun * v_n_fun * u * v *dx)
-    #     rhs_p = np.asarray(assemble(- 2 * gamma * u_n_fun * v_n_fun * q_n_fun * v * dx))
-    #     Mat_rhs = lil_matrix(A.shape)
-    #     Mat_rhs[:,:] = gamma*M_lil[:,:] - 2*gamma*M_uv[:,:]
-    #     pk[start:end] = FCT_alg(Mat_p, rhs_p, p_np1, dt, nodes, M_lil, M_lumped, 
-    #                             dof_neighbors, source_mat=Mat_rhs)
+        q_n_fun = vec_to_function(qk[start:end], V)
+        
+        Aa = assemble_sparse(dot(grad(v_n_fun), grad(v)) * u * dx)
+        Adf = assemble_sparse(div(grad(v_n_fun)) * u * v * dx)
+        Ar = assemble_sparse((1 - eta*u_n_fun) * exp(-eta*u_n_fun) * u * v * dx)
+        Mat_p = lil_matrix(Ad.shape)
+        Mat_p[:,:]  = Dm*Ad[:,:]  + chi*(Aa[:,:] + Adf[:,:]) - Ar
+        rhs_p = np.asarray(assemble(control_fun * q_n_fun * v * dx))
+        pk[start:end] = FCT_alg_ref(Mat_p, rhs_p, p_np1, dt, nodes, M, M_lumped, 
+                                dof_neighbors)
        
     return pk, qk
     
