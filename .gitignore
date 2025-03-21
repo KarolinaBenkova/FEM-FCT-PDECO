@@ -3,5 +3,5 @@ mimura_finaltime_reactiononRHS.png
 __pycache__/
 solidbody_pdeco/
 *.csv
-
+ref_*/
 
