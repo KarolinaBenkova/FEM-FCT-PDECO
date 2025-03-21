@@ -48,7 +48,7 @@ print("Control parameter is the constant a =", c_a)
 
 # ---------------------------- Output File Path ------------------------------
 
-output_dir = Path(f"AdvSchnak_data_T{T}")
+output_dir = Path(f"AdvSchnak_data_T{T}_stationarywind1_corr")
 output_dir.mkdir(parents=True, exist_ok=True)
 output_filename_u = output_dir / "schnak_u.csv"
 output_filename_v = output_dir / "schnak_v.csv"
@@ -80,12 +80,12 @@ vk[:nodes] = v0
 
 # ------------------------------ Solve PDEs ----------------------------------
 
-uk, vk = hp.solve_schnak_system(
-    z, uk, vk, V, nodes, num_steps, dt, dof_neighbors,
-    control_fun=constant_a, show_plots=show_plots, vertex_to_dof=vertex_to_dof)
+# uk, vk = hp.solve_schnak_system(
+#     z, uk, vk, V, nodes, num_steps, dt, dof_neighbors,
+#     control_fun=constant_a, show_plots=show_plots, vertex_to_dof=vertex_to_dof)
 
-uk.tofile(output_filename_u, sep=",")
-vk.tofile(output_filename_v, sep=",")
+# uk.tofile(output_filename_u, sep=",")
+# vk.tofile(output_filename_v, sep=",")
 
 # ------------------  L^2-norm of true control over Ω × [0,T] ----------------
 
@@ -93,3 +93,31 @@ M = hp.assemble_sparse(u * w * df.dx)
 control_as_td_vector = c_a * np.ones(vec_length)
 control_norm = hp.L2_norm_sq_Q(control_as_td_vector, num_steps, dt, M)
 print(f"L^2-norm of the control over Ω × [0,{T}]:", control_norm)
+
+beta = 1e-1
+print(f"β/2 *||c_true|| in L^2-norm^2 over Ω × [0,{T}]:", beta/2*control_norm)
+
+eval_sim = 1/T * 1/((a2-a1)**2) * control_norm
+print(f"Average true control in L^2(Q)^2 over Ω × [0,{T}] :", eval_sim)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

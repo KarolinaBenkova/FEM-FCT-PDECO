@@ -80,11 +80,11 @@ uk[:nodes] = u0
 
 # ------------------------------- Solve PDE ----------------------------------
 
-uk, _ = hp.solve_nonlinear_equation(
-    z, uk, None, V, nodes, num_steps, dt, dof_neighbors,
-    control_fun=source_fun, show_plots=show_plots, vertex_to_dof=vertex_to_dof)
+# uk, _ = hp.solve_nonlinear_equation(
+#     z, uk, None, V, nodes, num_steps, dt, dof_neighbors,
+#     control_fun=source_fun, show_plots=show_plots, vertex_to_dof=vertex_to_dof)
 
-uk.tofile(output_filename, sep=",")
+# uk.tofile(output_filename, sep=",")
 
 # ------------------  L^2-norm of true control over Ω × [0,T] ----------------
 
@@ -93,3 +93,9 @@ source_vector = df.interpolate(source_fun, V).vector().get_local()
 source_vector_td = np.tile(source_vector, num_steps + 1)
 control_norm = hp.L2_norm_sq_Q(source_vector_td, num_steps, dt, M)
 print(f"L^2-norm of the control over Ω × [0,{T}]:", control_norm)
+
+# beta = 1e-3
+# print(f"β/2 *||c_true|| in L^2-norm^2 over Ω × [0,{T}]:", beta/2*control_norm)
+
+# eval_sim = 1/T * 1/((a2-a1)**2) * control_norm
+# print(f"Average true control in L^2(Q)^2 over Ω × [0,{T}] :", eval_sim)

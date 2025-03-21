@@ -19,7 +19,7 @@ J(u,v,c) = 1/2*||u(T) - û_T||² + 1/2*||v(T) - v̂_T||² + β/2*||c||²
 
 min_{u,v,c} J(u,v,c)
 subject to:
- du/dt + ∇⋅(-Du*∇u + ω1*w*u) + γ(u-u²v) = γ*c     in Ω × [0,T]
+ du/dt + ∇⋅(-Du*∇u + ω1*w*u) + γ(u-u²v) = γ*(c/r)     in Ω × [0,T]
  dv/dt + ∇⋅(-Dv*∇v + ω2*w*v) + γ(u²v-b) = 0       in Ω × [0,T]
                       (-Du*∇u + ω1*w*u)⋅n = 0       on ∂Ω × [0,T]
                       (-Dv*∇v + ω2*w*v)⋅n = 0       on ∂Ω × [0,T]
@@ -28,6 +28,7 @@ subject to:
                                      c in [ca,cb]
 where w is a velocity/wind vector satisfying:
   ∇⋅w = 0  in Ω × [0,T]
+r is rescaling coefficient. If r=100, then c = 100*a = 10, if r=1, then c=a.
 
 Additional optimality conditions:
 - Adjoint equations, BCs and final-time conditions
@@ -46,7 +47,7 @@ intervals = round((a2-a1)/dx)
 
 dt = 0.001
 T = 0.5
-T_data = 2
+T_data = 1
 num_steps = round(T / dt)
 
 produce_plots = True # Toggle for visualization
@@ -57,31 +58,33 @@ optim = "finaltime"
 beta = 1e-1 # Regularization parameter
 
 # Box constraints for c
-c_lower = -1
-c_upper = 1
+c_lower = 0
+c_upper = 10
 
 Du, Dv, true_control, c_b, gamma, omega1, omega2, wind = hp.get_schnak_sys_params()
+rescaling = 1 #100
+true_control = true_control*rescaling
 
 # --------------------- Gradient descent parameters --------------------------
 
-tol = 1e-4
+tol = 1e-3
 max_iter_armijo = 10
 max_iter_GD = 50
 
 # ----------------------- Input & Output file paths --------------------------
 
-target_data_path = f"AdvSchnak_data_T2"
+target_data_path = "AdvSchnak_data_T2_stationarywind1_corr"
 target_data_file_name_u = "schnak_u"
 target_data_file_name_v = "schnak_v"
 target_file_u = os.path.join(target_data_path, f"{target_data_file_name_u}_T{T_data}.csv")
 target_file_v = os.path.join(target_data_path, f"{target_data_file_name_v}_T{T_data}.csv")
 
-out_folder = f"ref_Sch_FT_T{T}_Tdata{T_data}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}_Feb10_cinitrand"
+out_folder = f"ref_Sch_FT_T{T}_Tdata{T_data}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}_rescaled"
 if not Path(out_folder).exists():
     Path(out_folder).mkdir(parents=True)
    
 print(f"dx={dx}, {dt=}, {T=}, {T_data=}, {beta=}, {c_lower=}, {c_upper=}")
-print(f"{Du=}, {Dv=}, {c_b=}, {gamma=}, {omega1=}, {omega2=}")
+print(f"{Du=}, {Dv=}, {c_b=}, {gamma=}, {omega1=}, {omega2=}, {true_control=}")
 print(f"{tol=}, {max_iter_GD=}, {max_iter_armijo=}")
 
 # ------------------------------ Initialization ------------------------------
@@ -119,9 +122,7 @@ vhat_T_re, vhat_T = hp.import_data_final(target_file_v, nodes, vertex_to_dof)
 vec_length = (num_steps + 1) * nodes # Include zero and final time
 
 # Initial guess for the control
-# ck = np.zeros(vec_length)
-rng = np.random.default_rng(seed=5)
-ck = np.clip(rng.random(vec_length), c_lower, c_upper)
+ck = np.zeros(vec_length)
 
 # Solve the state equation for the corresponding state
 uk = np.zeros(vec_length)
@@ -139,7 +140,7 @@ pk, qk = hp.solve_adjoint_schnak_system(uk, vk, uhat_T, vhat_T, pk, qk, T, V,
 
 # Calculate initial cost functional
 cost_fun_old = hp.cost_functional(uk, uhat_T, ck, num_steps, dt, M, beta, 
-                               optim, var2=vk, var2_target=vhat_T)
+                                optim, var2=vk, var2_target=vhat_T)
 cost_fun_new = (2 + tol) * cost_fun_old
 stop_crit = hp.rel_err(cost_fun_new, cost_fun_old)
 
@@ -162,14 +163,15 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     print(f"\n{it=}")
     
     ## 1. choose the descent direction 
-    dk = -(beta*ck - gamma*pk)
+    # dk = -(beta*ck - gamma*pk)
+    dk = -(beta*ck - gamma/rescaling*pk)
     
     ## 2. Find optimal stepsize with Armijo line search and calculate uk, ck
     print("Starting Armijo line search...")
     uk, vk, ck, iters = hp.armijo_line_search_ref(uk, ck, dk, uhat_T, num_steps, dt, 
-                       c_lower, c_upper, beta, cost_fun_old, nodes, optim, 
-                       V, dof_neighbors=dof_neighbors, var2=vk, var2_target=vhat_T,
-                       nonlinear_solver=hp.solve_schnak_system, max_iter=max_iter_armijo)
+                        c_lower, c_upper, beta, cost_fun_old, nodes, optim, 
+                        V, dof_neighbors=dof_neighbors, var2=vk, var2_target=vhat_T,
+                        nonlinear_solver=hp.solve_schnak_system, max_iter=max_iter_armijo)
       
     ## 3. Solve the adjoint equation using new uk and vk
     pk, qk = hp.solve_adjoint_schnak_system(uk, vk, uhat_T, vhat_T, pk, qk, T, 
@@ -197,22 +199,24 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
             # If armijo converged after a fail, reset the counter
             fail_count = 0
             fail_restart_count += 1
-        # Save the current solution as the last best solution
-        u_backup = uk
-        v_backup = vk
-        p_backup = pk
-        q_backup = qk
-        c_backup = ck
-        it_backup = it
+            fail_pass = False
 
-        if fail_restart_count == 5:
+        if fail_restart_count < 5:
+            # Save the current solution as the last best solution
+            u_backup = uk
+            v_backup = vk
+            p_backup = pk
+            q_backup = qk
+            c_backup = ck
+            it_backup = it
+        elif fail_restart_count == 5:
             # End while loop, assume we have found the most optimal solution
             print("Maximum number of restarts reached. Exiting...")
             break
     
     ## 4. Calculate metrics
     cost_fun_new = hp.cost_functional(uk, uhat_T, ck, num_steps, dt, M, beta, 
-                                   optim, var2=vk, var2_target=vhat_T)
+                                    optim, var2=vk, var2_target=vhat_T)
     stop_crit = hp.rel_err(cost_fun_new, cost_fun_old)
     eval_sim = 1/T * 1/((a2-a1)**2) * hp.L2_norm_sq_Q(ck, num_steps, dt, M)
    
@@ -260,6 +264,10 @@ misfit_norm_v = hp.L2_norm_sq_Omega(vk[num_steps * nodes:] - vhat_T, M)
 control_as_td_vector = true_control * np.ones(vec_length)
 true_control_norm = hp.L2_norm_sq_Q(control_as_td_vector, num_steps, dt, M)
 
+u_ctrue, _ = hp.solve_nonlinear_equation(
+    control_as_td_vector, uk, None, V, nodes, num_steps, dt, dof_neighbors,
+    show_plots=False, vertex_to_dof=vertex_to_dof)
+
 uk.tofile(out_folder + "/AdvSchnak_u.csv", sep = ",")
 vk.tofile(out_folder + "/AdvSchnak_v.csv", sep = ",")
 ck.tofile(out_folder + "/AdvSchnak_c.csv", sep = ",")
@@ -272,7 +280,7 @@ data = {"timestamp" : datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     "beta" : beta, "tol" : tol, "GD its" : it, "Armijo its" : armijo_its, 
     "C_ad" : f"[{c_lower}, {c_upper}]", "Mean c. in L^2(Q)^2" : eval_sim, 
     "Misfit norm u" : misfit_norm_u, "Misfit norm v" : misfit_norm_v,
-    "J(c_true)" : true_control_norm/beta, "out_folder_name" : out_folder}
+    "J(c_true)" : beta/2*true_control_norm, "out_folder_name" : out_folder}
 
 csv_file_path = "AdvSchnak_FT_simulation_results.csv"
 file_exists = os.path.isfile(csv_file_path)
@@ -297,7 +305,7 @@ print("||u(T) - û_T|| in L^2(Ω)^2 :", misfit_norm_u)
 print("||v(T) - v̂_T|| in L^2(Ω)^2 :", misfit_norm_v)
 print("Average control in L^2(Q)^2:", eval_sim)
 print(f"Final cost functional value for Ω × [0,{T}]:", cost_fun_new)
-print(f"1/β *||c_true|| in L^2-norm^2 over Ω × [0,{T_data}]:", true_control_norm/beta)
+print(f"β/2 *||c_true|| in L^2-norm^2 over Ω × [0,{T_data}]:", beta/2*true_control_norm)
 print("Control mean at t=T:", np.mean(ck[num_steps*nodes:]))
 
 import matplotlib.pyplot as plt
@@ -309,3 +317,22 @@ for i in range(num_steps):
 plt.plot(mean_ck)
 plt.title("Mean of the control over domain at each time step")
 plt.show()
+
+# # ------------ Cost functional over [0,T_PDECO] using c_true, ----------------
+# # ---- corresponding u calculated over [0,T_PDECO], and uhat at T_data  ------
+# # --------------------- (T_PDECO is T in this script) ------------------------
+
+# control_as_td_vector = true_control * np.ones(vec_length)
+# true_control_norm = hp.L2_norm_sq_Q(control_as_td_vector, num_steps, dt, M)
+
+# # Calculate u that corresponds to c_true over [0,T]
+# u_ctrue, _ = hp.solve_nonlinear_equation(
+#     control_as_td_vector, uk, None, V, nodes, num_steps, dt, dof_neighbors,
+#     show_plots=False, vertex_to_dof=vertex_to_dof)
+
+# for bet in [1e-1, 1e-2, 1e-3]:
+#     cost_fun_ctrue = hp.cost_functional(u_ctrue, uhat_T, control_as_td_vector, 
+#                                         num_steps, dt, M, bet, optim)
+#     print(f"Cost functional with c_true over [0,{T}], {T_data=}, {bet=}:", cost_fun_ctrue)
+
+

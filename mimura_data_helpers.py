@@ -97,7 +97,6 @@ def mat_chtx_m(f_fun, m_fun, Dm, chi, u, v):
     beta = 0.5
     Aa = assemble_sparse(exp(-beta*m_fun)*dot(grad(f_fun), grad(v)) * u * dx)
     
-    
     return - Dm * Ad + chi*Aa
 
 def mat_chtx_p(f_fun, m_fun, Dm, chi, u, v):
@@ -105,5 +104,6 @@ def mat_chtx_p(f_fun, m_fun, Dm, chi, u, v):
     Ad = assemble_sparse(dot(grad(u), grad(v)) * dx)
     Aa = assemble_sparse(dot(grad(f_fun), grad(v)) * u * dx)
     Adf = assemble_sparse(div(grad(f_fun)) * u * v * dx)
-    Ar = assemble_sparse(m_fun*(2 - 3 * m_fun) * u * v * dx)
+    # Ar = assemble_sparse(m_fun*(2 - 3 * m_fun) * u * v * dx)
+    Ar = np.zeros(Ad.shape)
     return - Dm * Ad - chi * Aa - chi * Adf + Ar

@@ -41,7 +41,7 @@ dx = 0.025 # Element size
 intervals = round((a2-a1)/dx)
 
 dt = 0.001
-T = 0.5
+T = 1
 T_data = 1
 num_steps = round(T / dt)
 
@@ -70,7 +70,7 @@ target_data_path = "NL_data_eps0.0001_sp1_T2"
 target_data_file_name = "advection"
 target_file = os.path.join(target_data_path, f"{target_data_file_name}_T{T_data}.csv")
 
-out_folder = f"ref_NL_FT_T{T}_Tdata{T_data}beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}"
+out_folder = f"ref_NL_FT_T{T}_Tdata{T_data}beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}_test_truec"
 if not Path(out_folder).exists():
     Path(out_folder).mkdir(parents=True)
    
@@ -178,20 +178,22 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
             # If armijo converged after a fail, reset the counter
             fail_count = 0
             fail_restart_count += 1
-        # Save the current solution as the last best solution
-        u_backup = uk
-        p_backup = pk
-        c_backup = ck
-        it_backup = it
+            fail_pass = False
 
-        if fail_restart_count == 5:
+        if fail_restart_count < 5:
+            # Save the current solution as the last best solution
+            u_backup = uk
+            p_backup = pk
+            c_backup = ck
+            it_backup = it
+        elif fail_restart_count == 5:
             # End while loop, assume we have found the most optimal solution
             print("Maximum number of restarts reached. Exiting...")
             break
 
     ## 4. Calculate metrics
     cost_fun_new = hp.cost_functional(uk, uhat_T, ck, num_steps, dt, M, beta,
-                           optim)
+                            optim)
     stop_crit = hp.rel_err(cost_fun_new, cost_fun_old)
     eval_sim = 1/T * 1/((a2-a1)**2) * hp.L2_norm_sq_Q(ck, num_steps, dt, M)
 
@@ -241,7 +243,7 @@ data = {"timestamp" : datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     "Sim. duration" : round(simulation_duration, 2), "T" : T, "T_data" : T_data, 
     "beta" : beta, "tol" : tol, "GD its" : it, "Armijo its" : armijo_its, 
     "C_ad" : f"[{c_lower}, {c_upper}]", "Mean c. in L^2(Q)^2" : eval_sim, 
-    "Misfit norm" : misfit_norm, "J(c_true)" : true_control_norm/beta,
+    "Misfit norm" : misfit_norm, "J(c_true)" : beta/2*true_control_norm,
     "out_folder_name" : out_folder}
 
 csv_file_path = "NL_FT_simulation_results.csv"
@@ -266,4 +268,27 @@ print("Solutions saved to:", out_folder)
 print("||u(T) - û_T|| in L^2(Ω)^2 :", misfit_norm)
 print("Average control in L^2(Q)^2:", eval_sim)
 print(f"Final cost functional value for Ω × [0,{T}]:", cost_fun_new)
-print(f"1/β *||c_true|| in L^2-norm^2 over Ω × [0,{T_data}]:", true_control_norm/beta)
+print(f"β/2 *||c_true|| in L^2-norm^2 over Ω × [0,{T_data}]:", beta/2*true_control_norm)
+
+
+# ------------ Cost functional over [0,T_PDECO] using c_true, ----------------
+# ---- corresponding u calculated over [0,T_PDECO], and uhat at T_data  ------
+# --------------------- (T_PDECO is T in this script) ------------------------
+
+k, l = 2, 2
+source_fun = df.Expression( "sin(k1 * pi * x[0]) * sin(k2 * pi * x[1])",
+    degree=4, pi=np.pi, k1=k, k2=l)
+source_vector = df.interpolate(source_fun, V).vector().get_local()
+source_vector_td = np.tile(source_vector, num_steps + 1)
+
+# Calculate u that corresponds to c_true over [0,T]
+u_ctrue, _ = hp.solve_nonlinear_equation(
+    np.zeros(nodes), uk, None, V, nodes, num_steps, dt, dof_neighbors,
+    control_fun=source_fun, show_plots=False, vertex_to_dof=vertex_to_dof)
+
+for bet in [1e-1, 1e-2, 1e-3]:
+    cost_fun_ctrue = hp.cost_functional(u_ctrue, uhat_T, source_vector_td, num_steps, dt, M, bet, optim)
+    print(f"Cost functional with c_true over [0,{T}], {T_data=}, {bet=}:", cost_fun_ctrue)
+
+
+

@@ -41,8 +41,8 @@ deltax = 0.1/2/2
 intervals_line = round((a2-a1)/deltax)
 beta = 0.1
 # box constraints for c, exact solution is in [0,1]
-c_upper = -1
-c_lower = 1
+c_lower = -1
+c_upper = 1
 # diffusion coefficient
 eps = 0.0001
 # speed of wind
@@ -59,7 +59,7 @@ k2 = 2
 
 show_plots = True
 example_name = f"nonlinear_stripes_source_control_coarse/advection_t"
-out_folder_name = f"NL_AT_T{T}_beta{beta}_Ca{c_upper}_Cb{c_lower}_tol{tol}_pert"
+out_folder_name = f"NL_AT_T{T}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}_pert"
 if not Path(out_folder_name).exists():
     Path(out_folder_name).mkdir(parents=True)
 
@@ -111,8 +111,6 @@ A_u = A - eps * Ad
 ## System matrix for the adjoint equation (opposite sign of transport matrix)
 A_p = - A - eps * Ad
 
-zeros = np.zeros(nodes)
-
 ###############################################################################
 ################ Target states & initial conditions for m,f ###################
 ###############################################################################
@@ -142,8 +140,8 @@ uk = np.zeros(vec_length)
 pk = np.zeros(vec_length)
 ck = np.zeros(vec_length)
 dk = np.zeros(vec_length)
-perturbation = np.random.uniform(-1e-2, 1e-2, vec_length)
-ck += perturbation
+# perturbation = np.random.uniform(-1e-2, 1e-2, vec_length)
+# ck += perturbation
 
 uk[:nodes] = u0
 
