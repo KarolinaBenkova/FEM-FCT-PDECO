@@ -1334,7 +1334,8 @@ def solve_adjoint_chtxs_system(uk, vk, uhat, vhat, pk, qk, control, T, V,
         num_steps (int): Number of time steps.
         dt (float): Time step size.
         dof_neighbors (list): Degrees of freedom neighbors for FCT.
-        optim
+        optim (str): Optimization type ("alltime" or "finaltime").
+
 
     Returns:
         np.ndarray: The computed adjoint variable pk at all time steps.
@@ -1365,14 +1366,13 @@ def solve_adjoint_chtxs_system(uk, vk, uhat, vhat, pk, qk, control, T, V,
         p_np1 = pk[end : end + nodes] # pk(t_{n+1})
     
         p_np1_fun = vec_to_function(p_np1, V) 
-        q_np1_fun = vec_to_function(q_np1, V)
         u_n_fun = vec_to_function(uk[start : end], V)      # uk(t_n)
         v_n_fun = vec_to_function(vk[start : end], V)      # vk(t_n)
         control_fun = vec_to_function(control[start : end], V) # ck(t_n)
         
         # First solve for q, then for p
         rhs_q = np.asarray(assemble(
-            -div( chi*u_n_fun * exp(-eta*u_n_fun) * grad(p_np1_fun)) *w*dx))
+            chi*u_n_fun * exp(-eta*u_n_fun) * dot(grad(p_np1_fun), grad(w))*dx))
         if optim == "alltime":
             rhs_q += vhat[start : end] - vk[start : end]
             
@@ -1382,13 +1382,9 @@ def solve_adjoint_chtxs_system(uk, vk, uhat, vhat, pk, qk, control, T, V,
         q_n_fun = vec_to_function(qk[start:end], V)
         
         Aa = assemble_sparse(
-            dot(    
-                grad(v_n_fun), grad( (1-eta*u_n_fun) * exp(-eta*u_n_fun) *w)
-                ) *p*dx)
-        Adf = assemble_sparse(
-            div(grad(v_n_fun)) * (1-eta*u_n_fun) * exp(-eta*u_n_fun) * p*w*dx)
+            (1-eta*u_n_fun) * exp(-eta*u_n_fun) * dot(grad(p), grad(w)) * dx)
         Mat_p = lil_matrix(Ad.shape)
-        Mat_p[:,:]  = Dm*Ad[:,:]  + chi*(Aa[:,:] + Adf[:,:])
+        Mat_p[:,:]  = Dm*Ad[:,:]  - chi*Aa[:,:]
         
         rhs_p = np.asarray(assemble(control_fun * q_n_fun * w * dx))
         if optim == "alltime":
@@ -1757,6 +1753,39 @@ def FCT_alg_ref(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, non_flux_mat
 
     rhs_u_Low = M_lumped @ u_n + dt * rhs
     u_Low = spsolve(Mat_u_Low, rhs_u_Low)
+    
+    #### check M-matrix properties
+    from scipy.sparse import spdiags
+    #1. all diag. coefs are positive
+    diag_Mat_u_Low = Mat_u_Low.diagonal()
+    print("1:",np.all(diag_Mat_u_Low > 0))
+
+    #2. no positive off-diagonal entries
+    diag_Mat_u_Low = spdiags(diag_Mat_u_Low, diags=0, m=nodes, n=nodes)
+    Mat_u_Low_nondiag = Mat_u_Low - diag_Mat_u_Low
+    Mat_u_Low_flat = Mat_u_Low_nondiag.todense().reshape(nodes**2)
+    print("2:", np.all(Mat_u_Low_flat <= 0))
+        
+    #3. diagonally dominant
+    Mat_u_Low_rowsums = np.sum(Mat_u_Low.todense(), axis=1)
+    print("3:", np.all(Mat_u_Low_rowsums > 0))
+    
+    lower_bounds_dt = []
+    upper_bounds_dt = []
+    row_sums_A = [ A[i, :].sum() for i in range(A.shape[0]) ]
+    for i in range(len(row_sums_A)):
+        if row_sums_A[i] < 0:
+            upper_bounds_dt.append(-M_lumped_diag[i] / row_sums_A[i])
+
+        elif row_sums_A[i] > 0:
+            lower_bounds_dt.append(-M_lumped_diag[i] / row_sums_A[i])
+        # else:
+            # print("DIVISION BY ZERO", row_sums_A[i])
+        
+    print("Upper bound on dt:", min(upper_bounds_dt))
+    print("Lower bound on dt:", max(lower_bounds_dt))
+        
+    ##################################
     
     ## 2. Calculate raw antidiffusive flux
     # approximate the derivative du/dt using Chebyshev semi-iterative method

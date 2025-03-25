@@ -45,8 +45,8 @@ dx = 0.025 # Element size
 intervals = round((a2-a1)/dx)
 
 dt = 0.1
-T = 3*dt
-T_data = 3*dt#1#10.0
+T = round(5*dt,1)
+T_data = round(5*dt,1)
 num_steps = round(T / dt)
 
 produce_plots = True # Toggle for visualization
@@ -65,7 +65,7 @@ delta, Dm, Df, chi, true_control, eta = hp.get_chtxs_sys_params()
 # --------------------- Gradient descent parameters --------------------------
 
 tol = 1e-4
-max_iter_armijo = 10
+max_iter_armijo = 3
 max_iter_GD = 50
 
 # ----------------------- Input & Output file paths --------------------------
@@ -75,7 +75,7 @@ target_file_u = os.path.join(target_data_path, f"chtxs_m_t100.csv")
 target_file_v = os.path.join(target_data_path, f"chtxs_f_t100.csv")
 
 # out_folder = f"ref_Chtx_AT_T{T}_Tdata{T_data}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}_cguess_pseudomass_statesguess_targets"
-out_folder = f"ref_Chtx_AT_T{T}_Tdata{T_data}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}"#"_interptargets_cguess_pseudomass_statesguess_targets"
+out_folder = f"ref_Chtx_AT_T{T}_Tdata{T_data}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}_corr"#"_interptargets_cguess_pseudomass_statesguess_targets"
 if not Path(out_folder).exists():
     Path(out_folder).mkdir(parents=True)
    
@@ -109,6 +109,20 @@ uhat_re, uhat = hp.import_data_final(target_file_u, nodes, vertex_to_dof,
 vhat_re, vhat = hp.import_data_final(target_file_v, nodes, vertex_to_dof,
                                           num_steps=num_steps, time_dep=True)
 
+# ## rescale target states
+# a = np.amin(uhat)
+# b = np.amax(uhat)
+# c = 0
+# d = 1
+# # Linear transform from [a,b] to [c,d]
+# uhat = (d-c)/(b-a) * (uhat-a) + c
+# uhat_re = (d-c)/(b-a) * (uhat_re-a) + c
+# a = np.amin(vhat)
+# b = np.amax(vhat)
+# # Linear transform from [a,b] to [c,d]
+# vhat = (d-c)/(b-a) * (vhat-a) + c
+# vhat_re = (d-c)/(b-a) * (vhat_re-a) + c
+
 ## OR: choose interpolated target states
 # target_file_u = os.path.join(target_data_path, f"chtxs_m_t{T_data}.csv")
 # target_file_v = os.path.join(target_data_path, f"chtxs_f_t{T_data}.csv")
@@ -132,67 +146,68 @@ vec_length = (num_steps + 1) * nodes # Include zero and final time
 # Initial guess for the control
 ck = np.zeros(vec_length)
 
-# Solve the state equation for the corresponding state
+# Solve for the states corresponding to initial guess for the control
 uk = np.zeros(vec_length)
 vk = np.zeros(vec_length)
 uk[:nodes] = u0
 vk[:nodes] = v0
+
+uk, vk = hp.solve_chtxs_system(
+    ck, uk, vk, V, nodes, num_steps, dt, dof_neighbors)
+
 ##############################################################################
-# uk, vk = hp.solve_chtxs_system(
-#     ck, uk, vk, V, nodes, num_steps, dt, dof_neighbors)
 # uk = 0.8*np.copy(uhat)
 # vk = 0.8*np.copy(vhat)
 # uk[:nodes] = u0
 # vk[:nodes] = v0
 ##############################################################################
 
-# Solve the adjoint equation
+# Solve the adjoint equation corresponding to the computed states
 pk = np.zeros(vec_length)
 qk = np.zeros(vec_length)
 pk, qk = hp.solve_adjoint_chtxs_system(uk, vk, uhat, vhat, pk, qk, ck, T, 
-                                       V, nodes, num_steps, dt, dof_neighbors, optim)
+                                        V, nodes, num_steps, dt, dof_neighbors, optim)
 
+# # ##############################################################################
+# ## Presolve the system for the control corresponding to the target states
+# from scipy.sparse.linalg import spsolve
+# import matplotlib.pyplot as plt
+# sqnodes = round(np.sqrt(nodes))
+# t=0
+# for i in range(1, num_steps + 1): 
+#     t += dt
+
+#     start = i * nodes
+#     end = (i + 1) * nodes
+    
+#     uhat_np1_fun = hp.vec_to_function(uhat[start:end], V)
+#     vhat_n = vhat[start-nodes:start]
+#     vhat_np1 = vhat[start:end]
+#     Mat_c = hp.assemble_sparse_lil(uhat_np1_fun * u * w *df.dx)
+    
+#     ## approach with pseudomass matrix
+#     Ad = hp.assemble_sparse(df.dot(df.grad(u), df.grad(w)) * df.dx)
+#     Mat_v = M + dt * (Df * Ad + delta * M)
+#     rhs_c = 1/dt* (Mat_v*vhat_np1 - M*vhat_n)
+#     ck[start:end] = np.clip(spsolve(Mat_c, rhs_c), c_lower, c_upper)
+
+#     # ## approach with ChebSI
+#     # Ad = hp.assemble_sparse(df.dot(df.grad(u), df.grad(w)) * df.dx)
+#     # Mat_v = M + dt * (Df * Ad + delta * M)
+#     # rhs_c = 1/dt* (Mat_v*vhat_np1 - M*vhat_n)
+#     # rhs_c = rhs_c / uhat[start:end]
+#     # Md = M.diagonal()
+#     # ck[start:end] = np.clip(hp.ChebSI(rhs_c, M, Md), c_lower, c_upper)
+
+#     if i % 5 == 0:
+#         print("t = ", round(t, 4))
+#         c_re = hp.reorder_vector_from_dof(ck[start:end], 1, nodes, vertex_to_dof)
+#         plt.imshow(c_re.reshape((sqnodes, sqnodes)))
+#         plt.colorbar()
+#         plt.show()
 # ##############################################################################
-## Presolve the system for the control corresponding to the target states
-from scipy.sparse.linalg import spsolve
-import matplotlib.pyplot as plt
-sqnodes = round(np.sqrt(nodes))
-t=0
-for i in range(1, num_steps + 1): 
-    t += dt
 
-    start = i * nodes
-    end = (i + 1) * nodes
-    
-    uhat_np1_fun = hp.vec_to_function(uhat[start:end], V)
-    vhat_n = vhat[start-nodes:start]
-    vhat_np1 = vhat[start:end]
-    Mat_c = hp.assemble_sparse_lil(uhat_np1_fun * u * w *df.dx)
-    
-    ## approach with pseudomass matrix
-    Ad = hp.assemble_sparse(df.dot(df.grad(u), df.grad(w)) * df.dx)
-    Mat_v = M + dt * (Df * Ad + delta * M)
-    rhs_c = 1/dt* (Mat_v*vhat_np1 - M*vhat_n)
-    ck[start:end] = np.clip(spsolve(Mat_c, rhs_c), c_lower, c_upper)
-
-    # ## approach with ChebSI
-    # Ad = hp.assemble_sparse(df.dot(df.grad(u), df.grad(w)) * df.dx)
-    # Mat_v = M + dt * (Df * Ad + delta * M)
-    # rhs_c = 1/dt* (Mat_v*vhat_np1 - M*vhat_n)
-    # rhs_c = rhs_c / uhat[start:end]
-    # Md = M.diagonal()
-    # ck[start:end] = np.clip(hp.ChebSI(rhs_c, M, Md), c_lower, c_upper)
-
-    if i % 5 == 0:
-        print("t = ", round(t, 4))
-        c_re = hp.reorder_vector_from_dof(ck[start:end], 1, nodes, vertex_to_dof)
-        plt.imshow(c_re.reshape((sqnodes, sqnodes)))
-        plt.colorbar()
-        plt.show()
-    
-##############################################################################
-
-# Calculate initial cost functional
+# Calculate initial cost functional 
 cost_fun_old = hp.cost_functional(uk, uhat, ck, num_steps, dt, M, beta, 
                                optim, var2=vk, var2_target=vhat)
 cost_fun_new = (2 + tol) * cost_fun_old
@@ -200,14 +215,11 @@ stop_crit = hp.rel_err(cost_fun_new, cost_fun_old)
 
 dk = np.zeros(vec_length)
 
-
-
-
 it = 0
 fail_count = 0
 fail_restart_count = 0
-fail_count_max = 6
-fail_restart_count_max = 3
+fail_count_max = 10
+fail_restart_count_max = 5
 fail_pass = False
 cost_fun_vals, cost_fidel_vals_u, cost_fidel_vals_v, cost_c_vals, armijo_its = ([] for _ in range(5))
 cost_fun_vals.append(cost_fun_old)
@@ -218,7 +230,7 @@ start_time = time.time()
 # ------------------------ PROJECTED GRADIENT DESCENT ------------------------
 ##############################################################################
 
-while (stop_crit >= tol or fail_pass) and it < 1:#max_iter_GD:
+while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     print(f"\n{it=}")
     
     ## 1. choose the descent direction 
