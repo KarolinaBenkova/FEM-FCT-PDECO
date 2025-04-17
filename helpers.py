@@ -1,5 +1,5 @@
 import dolfin as df
-from dolfin import dx, dot, grad, div, assemble, exp
+from dolfin import dx, dot, grad, assemble, exp
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -231,14 +231,14 @@ def find_node_neighbours(mesh, nodes, vertex_to_dof):
     """
     # Initialize an empty list to store neighbors for each node
     node_neighbors = [[] for _ in range(mesh.num_vertices())]
-    for vx in df.vertices(mesh):
+    for vx in df.vertices(mesh): # Loop over mesh vertices
         idx = vx.index()
         neighborhood = [df.Edge(mesh, i).entities(0) for i in vx.entities(1)]
         neighborhood = [node_index for sublist in neighborhood for node_index in sublist]
 
         # Remove own index from neighborhood
         neighborhood = [node_index for node_index in neighborhood if node_index != idx]
-        neighborhood.append(idx)
+        neighborhood.append(idx) ## optimize
         # Add the neighborhood to the list for the current node
         node_neighbors[idx] = neighborhood
 
@@ -647,7 +647,6 @@ def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighb
     Du, Dv, c_a, c_b, gamma, omega1, omega2, wind = get_schnak_sys_params()
     u = df.TrialFunction(V)
     v = df.TestFunction(V)
-    sqnodes = round(np.sqrt(nodes))
     M = assemble_sparse_lil(u * v * dx)
     M_lumped = row_lump(M, nodes)
     Ad = assemble_sparse_lil(dot(grad(u), grad(v)) * dx)
@@ -679,7 +678,6 @@ def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighb
         A = assemble_sparse_lil(dot(wind, grad(v)) * u * dx)
         Mat_var1 = lil_matrix(A.shape)
         Mat_var1[:,:] = Du*Ad[:,:] - omega1*A[:,:]
-        # rhs_var1 = np.asarray(assemble((gamma*(control_fun + var1_n_fun**2 * var2_n_fun))* v * dx))
         rhs_var1 = np.asarray(assemble((
             gamma/rescaling*control_fun + gamma*(var1_n_fun**2 * var2_n_fun))* v * dx))
 
@@ -694,22 +692,6 @@ def solve_schnak_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighb
         Mat_var2 = M + dt*(Dv*Ad - omega2*A + gamma*M_u2)
         var2[start : end] = spsolve(Mat_var2, M@var2_n + dt*rhs_var2) 
         
-        if show_plots is True and i % 100 == 0:
-            var1_re = reorder_vector_from_dof(var1[start:end], 1, nodes, vertex_to_dof)
-            var2_re = reorder_vector_from_dof(var2[start:end], 1, nodes, vertex_to_dof)
-            
-            fig2 = plt.figure(figsize=(10, 5), dpi=100)
-            
-            ax2 = plt.subplot(1,2,1)
-            im1 = plt.imshow(var1_re.reshape((sqnodes,sqnodes)), cmap ="gray")
-            fig2.colorbar(im1)
-            plt.title(f"Computed state $u$ at t={round(t,5)}")
-            
-            ax2 = plt.subplot(1,2,2)
-            im2 = plt.imshow(var2_re.reshape((sqnodes,sqnodes)), cmap="gray")
-            fig2.colorbar(im2)
-            plt.title(f"Computed state $v$ at t={round(t,5)}")
-            plt.show()
     return var1, var2
 
 def solve_adjoint_schnak_system(uk, vk, uhat_T, vhat_T, pk, qk, T, V, W, nodes, num_steps, dt, dof_neighbors):
@@ -1119,6 +1101,7 @@ def plot_progress(cost_fun_vals, cost_fidel_vals, cost_c_vals, it, out_folder,
 
     ax2 = fig2.add_subplot(1, 3, 1)
     im1 = plt.plot(np.arange(0, it + 2), cost_fun_vals)
+    plt.yscale('log')
     plt.title(f"{it=} Cost functional")
     
     ax2 = fig2.add_subplot(1, 3, 2)
@@ -1143,6 +1126,13 @@ def plot_progress(cost_fun_vals, cost_fidel_vals, cost_c_vals, it, out_folder,
         del im2_v
     fig2.clf()
     plt.close(fig2)
+    
+    ###
+    # fig2 = plt.figure(figsize=(5, 5))
+    # im1 = plt.plot(np.arange(1, it + 2), cost_fun_vals[1:])
+    # plt.yscale('log')
+    # plt.title("Cost functional")
+    ###
     
 def get_chtxs_sys_params():
     """
@@ -1191,7 +1181,7 @@ def chtxs_sys_IC(a1, a2, deltax, nodes, vertex_to_dof):
 
 def solve_chtxs_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbors,
                        control_fun=None, show_plots=False, vertex_to_dof=None,
-                       generation_mode=False, output_dir=None):
+                       generation_mode=False, output_dir=None, rescaling=1/10):
     """
     Solver for the chemotaxis system
     du/dt + ∇⋅(-Dm*∇u + χ*u*exp(-ηu)*∇v) = 0      in Ω × [0,T]
@@ -1239,7 +1229,7 @@ def solve_chtxs_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbo
     print("Solving the system of chemotaxis state equations...")
     for i in range(1, num_steps + 1):  # Solve for var2(t_{n+1}), var1(t_{n+1})
         t += dt
-        if i % 50 == 0:
+        if i % 10 == 0:
             print("t = ", round(t, 4))
 
         if not generation_mode:
@@ -1256,7 +1246,7 @@ def solve_chtxs_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbo
         var2_n_fun = vec_to_function(var2_n, V)
 
         var2_rhs = np.asarray(assemble(
-            var2_n_fun * v * dx  + dt * control_fun * var1_n_fun * v * dx))
+            var2_n_fun * v * dx  + dt * control_fun * var1_n_fun / rescaling * v * dx))
         
         var2_np1 = spsolve(Mat_var2, var2_rhs)
         
@@ -1279,8 +1269,8 @@ def solve_chtxs_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbo
             var1_n = var1_np1
             var2_n = var2_np1
             if output_dir is not None and i % 100 == 0:
-                output_filename_m = output_dir / f"chtxs_m_t{int(t)}.csv"
-                output_filename_f = output_dir / f"chtxs_f_t{int(t)}.csv"
+                output_filename_m = output_dir / f"chtxs_m_t{round(t,2)}.csv"
+                output_filename_f = output_dir / f"chtxs_f_t{round(t,2)}.csv"
                 var1_np1.tofile(output_filename_m, sep=",")
                 var2_np1.tofile(output_filename_f, sep=",")
 
@@ -1304,7 +1294,9 @@ def solve_chtxs_system(control, var1, var2, V, nodes, num_steps, dt, dof_neighbo
     return var1, var2
 
 def solve_adjoint_chtxs_system(uk, vk, uhat, vhat, pk, qk, control, T, V, 
-                               nodes, num_steps, dt, dof_neighbors, optim):
+                               nodes, num_steps, dt, dof_neighbors, optim,
+                               show_plots=None, vertex_to_dof=None, out_folder=None,
+                               mesh=None, deltax=None, rescaling=1/10):
     """
     Solves the adjoint system equations:
     -dp/dt + ∇⋅(-Dm*∇p) - χ*(1-η*u)*exp(-ηu)*∇p⋅∇v = c*q + (1-σ)(û-u)  in Ω x [0,T]
@@ -1312,10 +1304,10 @@ def solve_adjoint_chtxs_system(uk, vk, uhat, vhat, pk, qk, control, T, V,
                                        ∇p⋅n = ∇q⋅n = 0          on ∂Ω x [0,T]
                                                p(T) = σ(û_T - u(T))  in Ω
                                                q(T) = σ(v̂_T - v(T))  in Ω
-    (σ=0 for all-time optimization and σ=1 for final-time optimization)
+    (indicator σ=0 for all-time optimization and σ=1 for final-time optimization)
     corresponding to the chemotaxis system:
         du/dt + ∇⋅(-Dm*∇u + χ*u*exp(-ηu)*∇v) = 0      in Ω × [0,T]
-                    dv/dt + ∇⋅(-Dv*∇v) + δ*f = c*u    in Ω × [0,T]
+                    dv/dt + ∇⋅(-Dv*∇v) + δ*v = c*u    in Ω × [0,T]
                 (-Df*∇u + χ*u*exp(-ηu)*∇v)⋅n = 0      on ∂Ω × [0,T]
                                        ∇v⋅n = 0       on ∂Ω × [0,T]
                                        u(0) = u0(x)    in Ω
@@ -1341,6 +1333,12 @@ def solve_adjoint_chtxs_system(uk, vk, uhat, vhat, pk, qk, control, T, V,
         np.ndarray: The computed adjoint variable pk at all time steps.
     """
     
+    ### smooth p
+    # Step 1: FunctionSpace setup for smoothed gradient
+    V_vec = df.VectorFunctionSpace(mesh, "CG", 1)  # continuous vector field
+    V_dg0 = df.VectorFunctionSpace(mesh, "DG", 0)  # discontinuous gradient projection
+    u = df.TrialFunction(V_vec)
+    v = df.TestFunction(V_vec)
     delta, Dm, Df, chi, _, eta = get_chtxs_sys_params()
     
     p = df.TrialFunction(V)
@@ -1359,39 +1357,136 @@ def solve_adjoint_chtxs_system(uk, vk, uhat, vhat, pk, qk, control, T, V,
         start = i * nodes
         end = (i + 1) * nodes
         t -= dt
-        if i % 50 == 0:
+        if i % 10 == 0:
             print("t = ", round(t, 4))
             
         q_np1 = qk[end : end + nodes] # qk(t_{n+1})
         p_np1 = pk[end : end + nodes] # pk(t_{n+1})
     
         p_np1_fun = vec_to_function(p_np1, V) 
+        q_np1_fun = vec_to_function(q_np1, V) 
+
         u_n_fun = vec_to_function(uk[start : end], V)      # uk(t_n)
         v_n_fun = vec_to_function(vk[start : end], V)      # vk(t_n)
+
         control_fun = vec_to_function(control[start : end], V) # ck(t_n)
         
-        # First solve for q, then for p
-        rhs_q = np.asarray(assemble(
-            chi*u_n_fun * exp(-eta*u_n_fun) * dot(grad(p_np1_fun), grad(w))*dx))
+        # ############# v1: First solve for q, then for p #######################
+        # rhs_q = np.asarray(assemble(
+        #     chi*u_n_fun * exp(-eta*u_n_fun) * dot(grad(p_np1_fun), grad(w))*dx))
+        # if optim == "alltime":
+        #     rhs_q += vhat[start : end] - vk[start : end]
+            
+        # Mat_q = M + dt*(Df*Ad + delta*M)
+        # qk[start:end] = spsolve(Mat_q, M@q_np1 + dt*rhs_q) 
+        
+        # q_n_fun = vec_to_function(qk[start:end], V)
+        
+        # Aa = assemble_sparse(
+        #     (1-eta*u_n_fun) * exp(-eta*u_n_fun) * dot(grad(p), grad(w)) * dx)
+        # Mat_p = lil_matrix(Ad.shape)
+        # Mat_p[:,:]  = Dm*Ad[:,:]  - chi*Aa[:,:]
+        
+        # rhs_p = np.asarray(assemble(control_fun * q_n_fun * w * dx))
+        # if optim == "alltime":
+        #     rhs_p += uhat[start : end] - uk[start : end]
+            
+        # pk[start:end] = FCT_alg_ref(Mat_p, rhs_p, p_np1, dt, nodes, M, M_lumped, 
+        #                         dof_neighbors)
+       
+        #######################################################################
+        
+        ############# v2: First solve for p, then for q #######################
+        
+        Aa = assemble_sparse(
+            (1-eta*u_n_fun) * exp(-eta*u_n_fun) * dot(grad(p), grad(v_n_fun)) * w * dx)
+        
+        Mat_p = lil_matrix(Ad.shape)
+        Mat_p[:,:]  = Dm*Ad[:,:] - chi*Aa[:,:]
+        
+        rhs_p = np.asarray(assemble(control_fun * q_np1_fun / rescaling * w * dx))
+        if optim == "alltime":
+            rhs_p += uhat[start : end] - uk[start : end]
+            
+        p_new = FCT_alg_ref(Mat_p, rhs_p, p_np1, dt, nodes, M, M_lumped, 
+                                dof_neighbors, vertex_to_dof=vertex_to_dof)
+        p_new = rescale_boundary_nodes(p_new, V, vertex_to_dof, a1=0, a2=1, deltax=deltax)
+        p_new = smooth_corners_on_boundary(p_new, V, vertex_to_dof, a1=0, a2=1, deltax=deltax)
+        pk[start:end] = p_new
+        
+        p_n_fun = vec_to_function(pk[start:end], V)
+        
+        ## Gradient smoothing:
+        # Project raw gradient of p_n_fun into DG(0)
+        grad_p_raw = df.project(df.grad(p_n_fun), V_dg0)
+        # Solve a variational problem to smooth grad_p_raw into CG(1)
+        a = df.inner(u, v) * df.dx
+        L = df.inner(grad_p_raw, v) * df.dx
+        grad_p_smooth = df.Function(V_vec)
+        df.solve(a == L, grad_p_smooth)
+
+        rhs_q = np.asarray(df.assemble(
+            chi * u_n_fun * df.exp(-eta * u_n_fun) * dot(grad_p_smooth, grad(w)) * df.dx))
+        
+        # rhs_q = np.asarray(assemble(
+            # chi*u_n_fun * exp(-eta*u_n_fun) * dot(grad(p_n_fun), grad(w))*dx))
         if optim == "alltime":
             rhs_q += vhat[start : end] - vk[start : end]
             
         Mat_q = M + dt*(Df*Ad + delta*M)
-        qk[start:end] = spsolve(Mat_q, M@q_np1 + dt*rhs_q) 
         
-        q_n_fun = vec_to_function(qk[start:end], V)
+        q_new = spsolve(Mat_q, M@q_np1 + dt*rhs_q) 
+        q_new = rescale_boundary_nodes(q_new, V, vertex_to_dof, a1=0, a2=1, deltax=deltax)
+        q_new = smooth_corners_on_boundary(q_new, V, vertex_to_dof, a1=0, a2=1, deltax=deltax)
+        qk[start:end] = q_new
         
-        Aa = assemble_sparse(
-            (1-eta*u_n_fun) * exp(-eta*u_n_fun) * dot(grad(p), grad(w)) * dx)
-        Mat_p = lil_matrix(Ad.shape)
-        Mat_p[:,:]  = Dm*Ad[:,:]  - chi*Aa[:,:]
-        
-        rhs_p = np.asarray(assemble(control_fun * q_n_fun * w * dx))
-        if optim == "alltime":
-            rhs_p += uhat[start : end] - uk[start : end]
+        ######################################################################
+
+        # if show_plots:
+        #     sqnodes = round(np.sqrt(nodes))
+        #     pk_re = reorder_vector_from_dof(pk[start:end], 1, nodes, vertex_to_dof).reshape((sqnodes,sqnodes))
+        #     qk_re = reorder_vector_from_dof(qk[start:end], 1, nodes, vertex_to_dof).reshape((sqnodes,sqnodes))
             
-        pk[start:end] = FCT_alg_ref(Mat_p, rhs_p, p_np1, dt, nodes, M, M_lumped, 
-                                dof_neighbors)
+        #     sc_uhat_re = 0.2*reorder_vector_from_dof(uhat[start:end], 1, nodes, vertex_to_dof).reshape((sqnodes,sqnodes))
+        #     sc_vhat_re = 0.2*reorder_vector_from_dof(vhat[start:end], 1, nodes, vertex_to_dof).reshape((sqnodes,sqnodes))
+            
+            
+        #     # if i % 5 == 0 or i == num_steps-1 or i == 0: 
+                
+        #     fig = plt.figure(figsize=(20, 5))
+        #     ax = fig.add_subplot(1, 4, 1)
+        #     im1 = ax.imshow(pk_re)
+        #     cb1 = fig.colorbar(im1, ax=ax)
+        #     ax.set_title(f"Computed adjoint $p$ at t={round(t, 5)}")
+        
+        #     ax = fig.add_subplot(1, 4, 2)
+        #     im2 = ax.imshow(qk_re)
+        #     cb2 = fig.colorbar(im2, ax=ax)
+        #     ax.set_title(f"Computed adjoint $q$ at t={round(t, 5)}")
+            
+        #     ax = fig.add_subplot(1, 4, 3)
+        #     im3 = ax.imshow(sc_uhat_re)
+        #     cb3 = fig.colorbar(im3, ax=ax)
+        #     ax.set_title(f"$0.2*\hat u$ at t={round(t, 5)}")
+        
+        #     ax = fig.add_subplot(1, 4, 4)
+        #     im4 = ax.imshow(sc_vhat_re)
+        #     cb4 = fig.colorbar(im4, ax=ax)
+        #     ax.set_title(f"$0.2*\hat v$ at t={round(t, 5)}")
+        #     plt.show()
+            
+            
+            # fig.tight_layout(pad=3.0)
+            # plt.savefig(os.path.join(out_folder, f"/adj_{i:03}.png"))
+        
+            # # Clear and remove objects explicitly
+            # ax.clear()      # Clear axes
+            # cb1.remove()    # Remove colorbars
+            # cb2.remove()
+            # del im1, im2, cb1, cb2
+            # fig.clf()
+            # plt.close(fig) 
+        
        
     return pk, qk
     
@@ -1702,7 +1797,8 @@ def armijo_line_search_ref(var1, c, d, var1_target, num_steps, dt, c_lower,
     
     # return u_np1
 
-def FCT_alg_ref(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, non_flux_mat=None):
+def FCT_alg_ref(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, non_flux_mat=None,
+                vertex_to_dof=None):
     """
     Applies the Flux Corrected Transport (FCT) algorithm with linearized fluxes
     to the equation
@@ -1748,42 +1844,45 @@ def FCT_alg_ref(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, non_flux_mat
     
     ## 1. Calculate low-order solution u^{n+1} using previous time step solution
     Mat_u_Low = M_lumped + dt * (A - D)
+
     if non_flux_mat is not None:
         Mat_u_Low += dt * non_flux_mat
 
     rhs_u_Low = M_lumped @ u_n + dt * rhs
+    
     u_Low = spsolve(Mat_u_Low, rhs_u_Low)
     
     #### check M-matrix properties
-    from scipy.sparse import spdiags
-    #1. all diag. coefs are positive
-    diag_Mat_u_Low = Mat_u_Low.diagonal()
-    print("1:",np.all(diag_Mat_u_Low > 0))
+    # from scipy.sparse import spdiags
+    # #1. all diag. coefs are positive
+    # diag_Mat_u_Low = Mat_u_Low.diagonal()
+    # print("1:",np.all(diag_Mat_u_Low > 0))
 
-    #2. no positive off-diagonal entries
-    diag_Mat_u_Low = spdiags(diag_Mat_u_Low, diags=0, m=nodes, n=nodes)
-    Mat_u_Low_nondiag = Mat_u_Low - diag_Mat_u_Low
-    Mat_u_Low_flat = Mat_u_Low_nondiag.todense().reshape(nodes**2)
-    print("2:", np.all(Mat_u_Low_flat <= 0))
+    # # #2. no positive off-diagonal entries
+    # diag_Mat_u_Low = spdiags(diag_Mat_u_Low, diags=0, m=nodes, n=nodes)
+    # Mat_u_Low_nondiag = Mat_u_Low - diag_Mat_u_Low
+    # Mat_u_Low_flat = Mat_u_Low_nondiag.todense().reshape(nodes**2)
+    # print("2:", np.all(Mat_u_Low_flat <= 0))
         
     #3. diagonally dominant
     Mat_u_Low_rowsums = np.sum(Mat_u_Low.todense(), axis=1)
-    print("3:", np.all(Mat_u_Low_rowsums > 0))
+    # print("3:", np.all(Mat_u_Low_rowsums > 0))
+    if np.all(Mat_u_Low_rowsums > 0) == False:
+        print("3:", np.all(Mat_u_Low_rowsums > 0))
+        lower_bounds_dt = []
+        upper_bounds_dt = []
+        row_sums_A = [ A[i, :].sum() for i in range(A.shape[0]) ]
+        for i in range(len(row_sums_A)):
+            if row_sums_A[i] < 0:
+                upper_bounds_dt.append(-M_lumped_diag[i] / row_sums_A[i])
     
-    lower_bounds_dt = []
-    upper_bounds_dt = []
-    row_sums_A = [ A[i, :].sum() for i in range(A.shape[0]) ]
-    for i in range(len(row_sums_A)):
-        if row_sums_A[i] < 0:
-            upper_bounds_dt.append(-M_lumped_diag[i] / row_sums_A[i])
-
-        elif row_sums_A[i] > 0:
-            lower_bounds_dt.append(-M_lumped_diag[i] / row_sums_A[i])
-        # else:
-            # print("DIVISION BY ZERO", row_sums_A[i])
-        
-    print("Upper bound on dt:", min(upper_bounds_dt))
-    print("Lower bound on dt:", max(lower_bounds_dt))
+            elif row_sums_A[i] > 0:
+                lower_bounds_dt.append(-M_lumped_diag[i] / row_sums_A[i])
+            # else:
+                # print("DIVISION BY ZERO", row_sums_A[i])
+            
+        print("Upper bound on dt:", min(upper_bounds_dt))
+        print("Lower bound on dt:", max(max(lower_bounds_dt), 0))
         
     ##################################
     
@@ -1791,7 +1890,10 @@ def FCT_alg_ref(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, non_flux_mat
     # approximate the derivative du/dt using Chebyshev semi-iterative method
     rhs_du_dt = np.squeeze(np.asarray(-A @ u_Low + rhs)) # flatten to vector array
     du_dt = ChebSI(rhs_du_dt, M, M_diag, 20, 0.5, 2)
-
+    
+    ### IDEA: different calculation: use the low-order solution and lumped mass matrix (but original flux matrix without artif.diffusion)
+    # du_dt = rhs_du_dt / M_lumped_diag
+    
     # corrected flux calculation(only use neighbouring nodes):
     F = lil_matrix((nodes, nodes))  # Use lil_matrix for efficient modifications
     for i in range(nodes):
@@ -1816,7 +1918,17 @@ def FCT_alg_ref(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, non_flux_mat
     
         u_Low_max[i] = max_value
         u_Low_min[i] = min_value
-       
+    
+    # ## IDEA: exclude itself from neighbours values to compare of from the list for the first and last node (corners)
+    # for i in range(1,nodes-1):
+    #     # Find the maximum value among the vector elements corresponding to 
+    #     # the node and its neighbors
+    #     max_value = max(u_Low[dof_index] for dof_index in dof_neighbors[i])
+    #     min_value = min(u_Low[dof_index] for dof_index in dof_neighbors[i])
+    
+    #     u_Low_max[i] = max_value
+    #     u_Low_min[i] = min_value
+        
     q_pos = u_Low_max - u_Low
     q_neg = u_Low_min - u_Low
     
@@ -1828,6 +1940,12 @@ def FCT_alg_ref(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, non_flux_mat
     r_neg[p_neg != 0] = np.minimum(1, M_lumped_diag[p_neg != 0]*q_neg[ p_neg!= 0]
                                   / (dt * p_neg[p_neg != 0]))
     
+    
+    # ## IDEA: reset r to 1 on boundary nodes (normally used with non-zero-flux BCs)
+    # _, boundary_nodes_dof = generate_boundary_nodes(nodes, vertex_to_dof)
+    # r_pos[boundary_nodes_dof] = 1
+    # r_neg[boundary_nodes_dof] = 1
+
     # (4) limit the raw antidiffusive fluxes (calculate correction factors)    
     F_nz = sparse_nonzero(F)
     Fbar = np.zeros(nodes)
@@ -1841,7 +1959,7 @@ def FCT_alg_ref(A, rhs, u_n, dt, nodes, M, M_lumped, dof_neighbors, non_flux_mat
     ## 4. Correct u_Low^{n+1} explicitly:
     u_np1 = u_Low + dt*Fbar/M_lumped_diag
     
-    return u_np1
+    return u_np1 
 
 def import_data_final(file_path, nodes, vertex_to_dof, num_steps=0,
                       time_dep=False):
@@ -1931,9 +2049,107 @@ def norm_true_control(example, T, dt, M, V, c_a=None):
     
     return control_norm
     
+def smooth_corners_on_boundary(vec, V, vertex_to_dof, a1, a2, deltax):
+    """
+    Replace the value at each corner DoF with the average of its boundary neighbors.
+
+    Parameters:
+        vec (np.ndarray): The vector of nodal values (e.g. q.vector().get_local()).
+        V (FunctionSpace): The function space.
+        vertex_to_dof (np.ndarray): Mapping from mesh vertices to DoFs.
+        a1, a2 (float): Domain bounds (assumed square).
+        deltax (float): Mesh element size.
+
+    Returns:
+        np.ndarray: Modified vec with smoothed corners.
+    """
+    sqnodes = round((a2 - a1) / deltax) + 1
+    corner_vertices = {
+        'bl': 0,
+        'br': sqnodes - 1,
+        'tl': (sqnodes - 1) * sqnodes,
+        'tr': sqnodes * sqnodes - 1
+    }
+
+    # Get corresponding DoF indices
+    corner_dofs = {k: int(vertex_to_dof[v]) for k, v in corner_vertices.items()}
+
+    # Neighboring boundary vertices (horizontal and vertical) for each corner
+    boundary_neighbors = {
+        'bl': [1, sqnodes],               # right and top neighbor
+        'br': [sqnodes - 2, 2*sqnodes - 1], # left and top neighbor
+        'tl': [(sqnodes - 2) * sqnodes, (sqnodes - 1) * sqnodes + 1],  # bottom and right
+        'tr': [(sqnodes - 1) * sqnodes + sqnodes - 2, sqnodes * (sqnodes - 1) - 1]  # bottom and left
+    }
+
+    new_vec = vec.copy()
+
+    for corner, neighbors in boundary_neighbors.items():
+        neighbor_dofs = [int(vertex_to_dof[v]) for v in neighbors]
+        avg = np.mean([vec[d] for d in neighbor_dofs])
+        new_vec[corner_dofs[corner]] = avg
+
+    return new_vec
     
+def rescale_boundary_nodes(u_vec, V, vertex_to_dof, a1=0, a2=1, deltax=0.025):
+    """
+    Linearly rescales boundary node values to fall within the range of
+    the adjacent inner row/column of nodes.
 
+    Parameters:
+        u_vec (np.ndarray): The vector of nodal values (DoFs).
+        V (FunctionSpace): The function space (CG1).
+        vertex_to_dof (np.ndarray): Mapping from mesh vertex indices to DoFs.
+        a1, a2 (float): Domain bounds (square domain assumed).
+        deltax (float): Mesh spacing.
 
+    Returns:
+        np.ndarray: Rescaled DoF vector.
+    """
+    new_u = u_vec.copy()
+    sqnodes = round((a2 - a1) / deltax) + 1  # number of nodes per side
+
+    def index(i, j):
+        return i * sqnodes + j  # row-major ordering
+
+    boundaries = {
+        "bottom": [(0, j) for j in range(sqnodes)],
+        "top": [(sqnodes - 1, j) for j in range(sqnodes)],
+        "left": [(i, 0) for i in range(sqnodes)],
+        "right": [(i, sqnodes - 1) for i in range(sqnodes)],
+    }
+
+    adjacents = {
+        "bottom": [(1, j) for j in range(sqnodes)],
+        "top": [(sqnodes - 2, j) for j in range(sqnodes)],
+        "left": [(i, 1) for i in range(sqnodes)],
+        "right": [(i, sqnodes - 2) for i in range(sqnodes)],
+    }
+
+    global_min = np.min(u_vec)
+    global_max = np.max(u_vec)
+    eps = 1e-12  # for safety in division
+
+    for side in boundaries:
+        b_indices = [index(i, j) for i, j in boundaries[side]]
+        a_indices = [index(i, j) for i, j in adjacents[side]]
+
+        b_dofs = [int(vertex_to_dof[v]) for v in b_indices]
+        a_dofs = [int(vertex_to_dof[v]) for v in a_indices]
+
+        interior_values = [u_vec[d] for d in a_dofs]
+        u_min_adj = min(interior_values)
+        u_max_adj = max(interior_values)
+
+        # Avoid division by zero if global range is flat
+        scale_denominator = max(global_max - global_min, eps)
+
+        for d in b_dofs:
+            u_b = u_vec[d]
+            t = (u_b - global_min) / scale_denominator
+            new_u[d] = u_min_adj + t * (u_max_adj - u_min_adj)
+
+    return new_u
 
 
 

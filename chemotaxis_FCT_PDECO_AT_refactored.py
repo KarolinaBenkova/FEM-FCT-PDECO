@@ -7,6 +7,9 @@ import dolfin as df
 import numpy as np
 import helpers as hp
 
+from scipy.sparse.linalg import spsolve
+from scipy.sparse import diags
+
 # ----------------------------------------------------------------------------
 # Script to solve the PDECO problem with a chemotaxis system (all-time optim.)
 # (uses the variable names u,v instead of m,f, respectively)
@@ -15,23 +18,23 @@ import helpers as hp
 """
 Solves the PDECO problem below with projected gradient descent method and FCT
 Cost functional:
-J(u,v,c) = 1/2*||u(T) - û_T||² + 1/2*||v(T) - v̂_T||² + β/2*||c||²
-(misfit: L²-norms over Ω,  regularization: L²-norm over Ω × [0,T])
+J(u,v,c) = 1/2*||u - û||² + 1/2*||v - v̂||² + β/2*||c||²
+(misfit and regularization: L²-norm over Ω × [0,T])
 
 min_{u,v,c} J(u,v,c)
 subject to:  
   du/dt + ∇⋅(-Dm*∇u + X*u*exp(-ηu)*∇v) = 0      in Ω × [0,T]
-              dv/dt + ∇⋅(-Dv*∇v) + δ*v = c*u    in Ω × [0,T]
+              dv/dt + ∇⋅(-Dv*∇v) + δ*v = c*(u/r)    in Ω × [0,T]
           (-Dm*∇u + X*u*exp(-ηu)*∇v)⋅n = 0      on ∂Ω × [0,T]
                                  ∇v⋅n = 0       on ∂Ω × [0,T]
                                  u(0) = u0(x)    in Ω
                                  v(0) = v0(x)    in Ω
                                  c in [ca,cb]
-(X = chi)
-
+(X = chi, control to be recovered: c_orig = 100)
+r is rescaling coefficient. If r=1/10, then c = 1/10*c_orig = 10, if r=1, then c=c_orig.
 Additional optimality conditions:
 - Adjoint equations, BCs and final-time conditions
-  -dp/dt + ∇⋅(-Dm*∇p) - X*(1 - η*u)*exp(-ηu)*∇p⋅∇v =  û - u + c*q        in Ω x [0,T]
+  -dp/dt + ∇⋅(-Dm*∇p) - X*(1 - η*u)*exp(-ηu)*∇p⋅∇v =  û - u + c*(q/r)        in Ω x [0,T]
        -dq/dt + ∇⋅(-Df*∇q + X*u*exp(-ηu)*∇p) + δ*q = v̂ - v        in Ω x [0,T]
                                        ∇p⋅n = ∇q⋅n = 0          on ∂Ω x [0,T]
                                                p(T) = 0  in Ω
@@ -39,14 +42,36 @@ Additional optimality conditions:
 - Gradient equation:  β*c - q*u = 0   in Ωx[0,T]
 """
 
+# import sys
+
+# # Save original stdout and stderr
+# original_stdout = sys.stdout
+# original_stderr = sys.stderr
+
+# # Open a file to write output
+# with open("output_log.txt", "w") as f:
+#     sys.stdout = f
+#     sys.stderr = f
+    
+#     try:
+#         # Your script code goes here
+#         print("This will be saved to output_log.txt")
+#         # simulate an error
+#         raise ValueError("An example error.")
+#     finally:
+#         # Restore original stdout and stderr
+#         sys.stdout = original_stdout
+#         sys.stderr = original_stderr
+
+
 # ---------------------------- General Parameters ----------------------------
 a1, a2 = 0, 1
 dx = 0.025 # Element size
 intervals = round((a2-a1)/dx)
 
-dt = 0.1
-T = round(5*dt,1)
-T_data = round(5*dt,1)
+dt = 0.001
+T = round(100*dt,2)
+T_data = round(100*dt,2)
 num_steps = round(T / dt)
 
 produce_plots = True # Toggle for visualization
@@ -54,34 +79,39 @@ optim = "alltime"
 
 # ---------------------------- PDECO parameters ------------------------------
 
-beta = 1e-1 # Regularization parameter
+beta = 1e-4 # Regularization parameter
 
 # Box constraints for c
 c_lower = 0#-1
-c_upper = 100#1
+c_upper = 20#1
 
 delta, Dm, Df, chi, true_control, eta = hp.get_chtxs_sys_params()
+rescaling = 1/10
+true_control = true_control*rescaling
 
 # --------------------- Gradient descent parameters --------------------------
 
 tol = 1e-4
-max_iter_armijo = 3
-max_iter_GD = 50
+max_iter_armijo = 20
+max_iter_GD = 100
+armijo_gamma = 1e-5
+armijo_s0 = 2
 
 # ----------------------- Input & Output file paths --------------------------
 
-target_data_path = f"Chtxs_data_T100_dx{dx}"#"Chtxs_data_T100_coarse"
-target_file_u = os.path.join(target_data_path, f"chtxs_m_t100.csv")
-target_file_v = os.path.join(target_data_path, f"chtxs_f_t100.csv")
+target_data_path = f"Chtxs_data_T100_dx{dx}_dt{dt}"
+target_file_u = os.path.join(target_data_path, "chtxs_m_t0.5.csv") # "chtxs_m_t100.csv")#
+target_file_v = os.path.join(target_data_path, "chtxs_f_t0.5.csv") #"chtxs_f_t100.csv")#
+# target_file_u = os.path.join(target_data_path, "chtxs_m_t100.csv")
+# target_file_v = os.path.join(target_data_path, "chtxs_f_t100.csv")
 
-# out_folder = f"ref_Chtx_AT_T{T}_Tdata{T_data}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}_cguess_pseudomass_statesguess_targets"
-out_folder = f"ref_Chtx_AT_T{T}_Tdata{T_data}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}_corr"#"_interptargets_cguess_pseudomass_statesguess_targets"
+out_folder = f"ref_Chtx_AT_T{T}_Tdata{T_data}_dt{dt}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}_E5_rescaled_prec"
 if not Path(out_folder).exists():
     Path(out_folder).mkdir(parents=True)
    
 print(f"dx={dx}, {dt=}, {T=}, {T_data=}, {beta=}, {c_lower=}, {c_upper=}")
 print(f"{Dm=}, {Df=}, {delta=}, {chi=}, {eta=}")
-print(f"{tol=}, {max_iter_GD=}, {max_iter_armijo=}")
+print(f"{tol=}, {max_iter_GD=}, {max_iter_armijo=}, {armijo_gamma=}, {armijo_s0=}")
 
 # ------------------------------ Initialization ------------------------------
 
@@ -109,39 +139,12 @@ uhat_re, uhat = hp.import_data_final(target_file_u, nodes, vertex_to_dof,
 vhat_re, vhat = hp.import_data_final(target_file_v, nodes, vertex_to_dof,
                                           num_steps=num_steps, time_dep=True)
 
-# ## rescale target states
-# a = np.amin(uhat)
-# b = np.amax(uhat)
-# c = 0
-# d = 1
-# # Linear transform from [a,b] to [c,d]
-# uhat = (d-c)/(b-a) * (uhat-a) + c
-# uhat_re = (d-c)/(b-a) * (uhat_re-a) + c
-# a = np.amin(vhat)
-# b = np.amax(vhat)
-# # Linear transform from [a,b] to [c,d]
-# vhat = (d-c)/(b-a) * (vhat-a) + c
-# vhat_re = (d-c)/(b-a) * (vhat_re-a) + c
-
-## OR: choose interpolated target states
-# target_file_u = os.path.join(target_data_path, f"chtxs_m_t{T_data}.csv")
-# target_file_v = os.path.join(target_data_path, f"chtxs_f_t{T_data}.csv")
-# _, uhat_T = hp.import_data_final(target_file_u, nodes, vertex_to_dof)
-# _, vhat_T = hp.import_data_final(target_file_v, nodes, vertex_to_dof)
-# sqnodes = round(np.sqrt(nodes))
-# uhat = np.zeros((num_steps+1)*nodes)
-# vhat = np.zeros((num_steps+1)*nodes)
-# for i in range(num_steps+1): # includes states at time zero
-#     start = i*nodes
-#     end = (i+1)*nodes
-#     uhat[start:end] = i*dt /T * uhat_T
-#     vhat[start:end] = i*dt /T * vhat_T
-# uhat_re = hp.reorder_vector_from_dof(uhat, num_steps + 1, nodes, vertex_to_dof)
-# vhat_re = hp.reorder_vector_from_dof(vhat, num_steps + 1, nodes, vertex_to_dof)
-
 # ----------------- Initialize gradient descent variables --------------------
 
 vec_length = (num_steps + 1) * nodes # Include zero and final time
+
+# uhat = np.ones(vec_length)
+# vhat = 2*np.ones(vec_length)
 
 # Initial guess for the control
 ck = np.zeros(vec_length)
@@ -151,61 +154,16 @@ uk = np.zeros(vec_length)
 vk = np.zeros(vec_length)
 uk[:nodes] = u0
 vk[:nodes] = v0
-
 uk, vk = hp.solve_chtxs_system(
     ck, uk, vk, V, nodes, num_steps, dt, dof_neighbors)
-
-##############################################################################
-# uk = 0.8*np.copy(uhat)
-# vk = 0.8*np.copy(vhat)
-# uk[:nodes] = u0
-# vk[:nodes] = v0
-##############################################################################
 
 # Solve the adjoint equation corresponding to the computed states
 pk = np.zeros(vec_length)
 qk = np.zeros(vec_length)
 pk, qk = hp.solve_adjoint_chtxs_system(uk, vk, uhat, vhat, pk, qk, ck, T, 
-                                        V, nodes, num_steps, dt, dof_neighbors, optim)
-
-# # ##############################################################################
-# ## Presolve the system for the control corresponding to the target states
-# from scipy.sparse.linalg import spsolve
-# import matplotlib.pyplot as plt
-# sqnodes = round(np.sqrt(nodes))
-# t=0
-# for i in range(1, num_steps + 1): 
-#     t += dt
-
-#     start = i * nodes
-#     end = (i + 1) * nodes
-    
-#     uhat_np1_fun = hp.vec_to_function(uhat[start:end], V)
-#     vhat_n = vhat[start-nodes:start]
-#     vhat_np1 = vhat[start:end]
-#     Mat_c = hp.assemble_sparse_lil(uhat_np1_fun * u * w *df.dx)
-    
-#     ## approach with pseudomass matrix
-#     Ad = hp.assemble_sparse(df.dot(df.grad(u), df.grad(w)) * df.dx)
-#     Mat_v = M + dt * (Df * Ad + delta * M)
-#     rhs_c = 1/dt* (Mat_v*vhat_np1 - M*vhat_n)
-#     ck[start:end] = np.clip(spsolve(Mat_c, rhs_c), c_lower, c_upper)
-
-#     # ## approach with ChebSI
-#     # Ad = hp.assemble_sparse(df.dot(df.grad(u), df.grad(w)) * df.dx)
-#     # Mat_v = M + dt * (Df * Ad + delta * M)
-#     # rhs_c = 1/dt* (Mat_v*vhat_np1 - M*vhat_n)
-#     # rhs_c = rhs_c / uhat[start:end]
-#     # Md = M.diagonal()
-#     # ck[start:end] = np.clip(hp.ChebSI(rhs_c, M, Md), c_lower, c_upper)
-
-#     if i % 5 == 0:
-#         print("t = ", round(t, 4))
-#         c_re = hp.reorder_vector_from_dof(ck[start:end], 1, nodes, vertex_to_dof)
-#         plt.imshow(c_re.reshape((sqnodes, sqnodes)))
-#         plt.colorbar()
-#         plt.show()
-# ##############################################################################
+                                        V, nodes, num_steps, dt, dof_neighbors, optim,
+                                        mesh=mesh, deltax=dx, vertex_to_dof=vertex_to_dof,
+                                        rescaling=rescaling)
 
 # Calculate initial cost functional 
 cost_fun_old = hp.cost_functional(uk, uhat, ck, num_steps, dt, M, beta, 
@@ -218,7 +176,7 @@ dk = np.zeros(vec_length)
 it = 0
 fail_count = 0
 fail_restart_count = 0
-fail_count_max = 10
+fail_count_max = 5
 fail_restart_count_max = 5
 fail_pass = False
 cost_fun_vals, cost_fidel_vals_u, cost_fidel_vals_v, cost_c_vals, armijo_its = ([] for _ in range(5))
@@ -230,22 +188,29 @@ start_time = time.time()
 # ------------------------ PROJECTED GRADIENT DESCENT ------------------------
 ##############################################################################
 
-while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
+while (stop_crit >= tol or fail_pass or it < 2) and it < max_iter_GD:
     print(f"\n{it=}")
     
     ## 1. choose the descent direction 
-    dk = -(beta*ck - qk*uk)
+    # dk = -(beta*ck - qk*uk/rescaling)
+
+    ### Preconditioner approach
+    #1. Preconditioner M = diag(max |uk * qk / rescaling|)
+    Prec_dk = diags(np.max(np.abs(uk * qk/rescaling)) * np.ones_like(qk), offsets=0, format="csc")
+    dk = spsolve(Prec_dk, -(beta*ck - qk*uk/rescaling))
     
     ## 2. Find optimal stepsize with Armijo line search and calculate uk, ck
     print("Starting Armijo line search...")
     uk, vk, ck, iters = hp.armijo_line_search_ref(uk, ck, dk, uhat, num_steps, dt, 
                        c_lower, c_upper, beta, cost_fun_old, nodes, optim, 
                        V, dof_neighbors=dof_neighbors, var2=vk, var2_target=vhat,
-                        nonlinear_solver=hp.solve_chtxs_system, max_iter=max_iter_armijo)
+                        nonlinear_solver=hp.solve_chtxs_system, max_iter=max_iter_armijo,
+                        gam=armijo_gamma, s0=armijo_s0)
       
     ## 3. Solve the adjoint equation using new uk and vk
     pk, qk = hp.solve_adjoint_chtxs_system(uk, vk, uhat, vhat, pk, qk, ck, T, 
-                                           V, nodes, num_steps, dt, dof_neighbors, optim)
+                                           V, nodes, num_steps, dt, dof_neighbors, optim,
+                                           mesh=mesh, deltax=dx, vertex_to_dof=vertex_to_dof, rescaling=rescaling)
     
     if iters == max_iter_armijo:
         fail_count += 1
@@ -373,13 +338,3 @@ print("Average control in L^2(Q)^2:", eval_sim)
 print(f"Final cost functional value for Ω × [0,{T}]:", cost_fun_new)
 print(f"β/2 *||c_true|| in L^2-norm^2 over Ω × [0,{T_data}]:", beta/2*true_control_norm)
 print("Control mean at t=T:", np.mean(ck[num_steps*nodes:]))
-
-import matplotlib.pyplot as plt
-mean_ck = []
-for i in range(num_steps):
-    start = i * nodes
-    end = (i+1) * nodes
-    mean_ck.append(np.mean(ck[start:end]))
-plt.plot(mean_ck)
-plt.title("Mean of the control over domain at each time step")
-plt.show()

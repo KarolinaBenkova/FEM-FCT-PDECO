@@ -8,7 +8,7 @@ import numpy as np
 import helpers as hp
 
 # ----------------------------------------------------------------------------
-# Script to solve the PDECO problem with a chemotaxis system
+# Script to solve the PDECO problem with a chemotaxis system (final-time optim.)
 # (uses the variable names u,v instead of m,f, respectively)
 # ----------------------------------------------------------------------------
 
@@ -21,17 +21,17 @@ J(u,v,c) = 1/2*||u(T) - û_T||² + 1/2*||v(T) - v̂_T||² + β/2*||c||²
 min_{u,v,c} J(u,v,c)
 subject to:  
   du/dt + ∇⋅(-Dm*∇u + X*u*exp(-ηu)*∇v) = 0      in Ω × [0,T]
-              dv/dt + ∇⋅(-Dv*∇v) + δ*f = c*u    in Ω × [0,T]
+              dv/dt + ∇⋅(-Dv*∇v) + δ*v = c*(u/r)    in Ω × [0,T]
           (-Df*∇u + X*u*exp(-ηu)*∇v)⋅n = 0      on ∂Ω × [0,T]
                                  ∇v⋅n = 0       on ∂Ω × [0,T]
                                  u(0) = u0(x)    in Ω
                                  v(0) = v0(x)    in Ω
                                  c in [ca,cb]
-(X = chi)
-
+(X = chi, control to be recovered: c_orig = 100)
+r is rescaling coefficient. If r=1/10, then c = 1/10*c_orig = 10, if r=1, then c=c_orig.
 Additional optimality conditions:
 - Adjoint equations, BCs and final-time conditions
-  -dp/dt + ∇⋅(-Dm*∇p) - X*(1 - η*u)*exp(-ηu)*∇p⋅∇v = c*q        in Ω x [0,T]
+  -dp/dt + ∇⋅(-Dm*∇p) - X*(1 - η*u)*exp(-ηu)*∇p⋅∇v = c*(q/r)       in Ω x [0,T]
        -dq/dt + ∇⋅(-Df*∇q + X*u*exp(-ηu)*∇p) + δ*q = 0          in Ω x [0,T]
                                        ∇p⋅n = ∇q⋅n = 0          on ∂Ω x [0,T]
                                                p(T) = û_T - u(T)  in Ω
@@ -54,24 +54,28 @@ optim = "finaltime"
 
 # ---------------------------- PDECO parameters ------------------------------
 
-beta = 1e-1 # Regularization parameter
+beta = 1e-4 # Regularization parameter
 
 # Box constraints for c
 c_lower = 0#-1
 c_upper = 100#1
 
 delta, Dm, Df, chi, true_control, eta = hp.get_chtxs_sys_params()
+rescaling = 1/10
+true_control = true_control*rescaling
 
 # --------------------- Gradient descent parameters --------------------------
 
 tol = 1e-4
 max_iter_armijo = 10
 max_iter_GD = 50
+armijo_gamma = 1e-5
+armijo_s0 = 2
 
 # ----------------------- Input & Output file paths --------------------------
 
 # target_data_path = "chtx_chi0.25_simplfeathers_dx0.005_Jan"
-target_data_path = f"Chtxs_data_T100_dx{dx}"#"Chtxs_data_T100_coarse"
+target_data_path = f"Chtxs_data_T100_dx{dx}_dt{dt}"#"Chtxs_data_T100_coarse"
 target_data_file_name_u = f"chtxs_m"
 target_data_file_name_v = f"chtxs_f"
 target_file_u = os.path.join(target_data_path, f"{target_data_file_name_u}_t{T_data}.csv")
@@ -83,7 +87,7 @@ if not Path(out_folder).exists():
    
 print(f"dx={dx}, {dt=}, {T=}, {T_data=}, {beta=}, {c_lower=}, {c_upper=}")
 print(f"{Dm=}, {Df=}, {delta=}, {chi=}, {eta=}")
-print(f"{tol=}, {max_iter_GD=}, {max_iter_armijo=}")
+print(f"{tol=}, {max_iter_GD=}, {max_iter_armijo=}, {armijo_gamma=}, {armijo_s0=}")
 
 # ------------------------------ Initialization ------------------------------
 
@@ -105,26 +109,19 @@ dof_neighbors = hp.find_node_neighbours(mesh, nodes, vertex_to_dof)
 
 u0, v0 = hp.chtxs_sys_IC(a1, a2, dx, nodes, vertex_to_dof)
 
-# if not os.path.exists(target_file_u):
-#     hp.extract_data(
-#         target_data_path, target_data_file_name_u, T_data, dt, nodes, vertex_to_dof)
-# if not os.path.exists(target_file_v):
-#     hp.extract_data(
-#         target_data_path, target_data_file_name_v, T_data, dt, nodes, vertex_to_dof)
-
+## choose target states as true solutions
 uhat_T_re, uhat_T = hp.import_data_final(target_file_u, nodes, vertex_to_dof)
 vhat_T_re, vhat_T = hp.import_data_final(target_file_v, nodes, vertex_to_dof)
 
-
-## Target states interpolation for initialization of uk, vk:
-sqnodes = round(np.sqrt(nodes))
-uhat_interpol = np.zeros((num_steps+1)*nodes)
-vhat_interpol = np.zeros((num_steps+1)*nodes)
-for i in range(num_steps+1): # includes states at time zero
-    start = i*nodes
-    end = (i+1)*nodes
-    uhat_interpol[start:end] = i*dt /T * uhat_T
-    vhat_interpol[start:end] = i*dt /T * vhat_T
+# ## Target states interpolation for initialization of uk, vk:
+# sqnodes = round(np.sqrt(nodes))
+# uhat_interpol = np.zeros((num_steps+1)*nodes)
+# vhat_interpol = np.zeros((num_steps+1)*nodes)
+# for i in range(num_steps+1): # includes states at time zero
+#     start = i*nodes
+#     end = (i+1)*nodes
+#     uhat_interpol[start:end] = i*dt /T * uhat_T
+#     vhat_interpol[start:end] = i*dt /T * vhat_T
 
 # ----------------- Initialize gradient descent variables --------------------
 
@@ -133,29 +130,26 @@ vec_length = (num_steps + 1) * nodes # Include zero and final time
 # Initial guess for the control
 ck = np.zeros(vec_length)
 
-##############################################################################
 # Solve the state equation for the corresponding state
-# uk = np.zeros(vec_length)
-# vk = np.zeros(vec_length)
-# uk[:nodes] = u0
-# vk[:nodes] = v0
-# uk, vk = hp.solve_chtxs_system(
-#     ck, uk, vk, V, nodes, num_steps, dt, dof_neighbors)
-
-uk = 0.8*np.copy(uhat_interpol)
-vk = 0.8*np.copy(vhat_interpol)
-
+uk = np.zeros(vec_length)
+vk = np.zeros(vec_length)
 uk[:nodes] = u0
 vk[:nodes] = v0
+uk, vk = hp.solve_chtxs_system(
+    ck, uk, vk, V, nodes, num_steps, dt, dof_neighbors)
 
-
-##############################################################################
+# uk = 0.8*np.copy(uhat_interpol)
+# vk = 0.8*np.copy(vhat_interpol)
+# uk[:nodes] = u0
+# vk[:nodes] = v0
 
 # Solve the adjoint equation
 pk = np.zeros(vec_length)
 qk = np.zeros(vec_length)
 pk, qk = hp.solve_adjoint_chtxs_system(uk, vk, uhat_T, vhat_T, pk, qk, ck, T, 
-                                       V, nodes, num_steps, dt, dof_neighbors, optim)
+                                       V, nodes, num_steps, dt, dof_neighbors, optim,
+                                       mesh=mesh, deltax=dx, vertex_to_dof=vertex_to_dof, rescaling=rescaling)
+
 
 # Calculate initial cost functional
 cost_fun_old = hp.cost_functional(uk, uhat_T, ck, num_steps, dt, M, beta, 
@@ -168,7 +162,7 @@ dk = np.zeros(vec_length)
 it = 0
 fail_count = 0
 fail_restart_count = 0
-fail_count_max = 6
+fail_count_max = 5
 fail_restart_count_max = 5
 fail_pass = False
 cost_fun_vals, cost_fidel_vals_u, cost_fidel_vals_v, cost_c_vals, armijo_its = ([] for _ in range(5))
@@ -184,18 +178,25 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     print(f"\n{it=}")
     
     ## 1. choose the descent direction 
-    dk = -(beta*ck - qk*uk)
+    dk = -(beta*ck - qk*uk/rescaling)
+    
+    ### Preconditioner approach
+    # #1. Preconditioner M = diag(max |uk * qk / rescaling|)
+    # Prec_dk = diags(np.max(np.abs(uk * qk/rescaling)) * np.ones_like(qk), offsets=0, format="csc")
+    # dk = spsolve(Prec_dk, -(beta*ck - qk*uk/rescaling))
     
     ## 2. Find optimal stepsize with Armijo line search and calculate uk, ck
     print("Starting Armijo line search...")
     uk, vk, ck, iters = hp.armijo_line_search_ref(uk, ck, dk, uhat_T, num_steps, dt, 
                        c_lower, c_upper, beta, cost_fun_old, nodes, optim, 
                        V, dof_neighbors=dof_neighbors, var2=vk, var2_target=vhat_T,
-                        nonlinear_solver=hp.solve_chtxs_system, max_iter=max_iter_armijo)
-      
+                        nonlinear_solver=hp.solve_chtxs_system, max_iter=max_iter_armijo,
+                        gam=armijo_gamma, s0=armijo_s0)
+
     ## 3. Solve the adjoint equation using new uk and vk
     pk, qk = hp.solve_adjoint_chtxs_system(uk, vk, uhat_T, vhat_T, pk, qk, ck, T, 
-                                           V, nodes, num_steps, dt, dof_neighbors, optim)
+                                           V, nodes, num_steps, dt, dof_neighbors, optim,
+                                           mesh=mesh, deltax=dx, vertex_to_dof=vertex_to_dof, rescaling=rescaling)
     
     if iters == max_iter_armijo:
         fail_count += 1
@@ -252,7 +253,7 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     if produce_plots is True:
         hp.plot_two_var_solution(
             uk, vk, pk, qk, ck, uhat_T_re, vhat_T_re, T_data, it, nodes, 
-            num_steps, dt, out_folder, vertex_to_dof, optim)
+            num_steps, dt, out_folder, vertex_to_dof, optim, step_freq=2)
 
     hp.plot_progress(
         cost_fun_vals, cost_fidel_vals_u, cost_c_vals, it, out_folder, 
@@ -279,8 +280,8 @@ if fail_count == fail_count_max or fail_restart_count == fail_restart_count_max 
     ck = c_backup
 
 eval_sim = 1/T * 1/((a2-a1)**2) * hp.L2_norm_sq_Q(ck, num_steps, dt, M)
-misfit_norm_u = hp.L2_norm_sq_Omega(uk[num_steps * nodes:] - uhat_T, M)
-misfit_norm_v = hp.L2_norm_sq_Omega(vk[num_steps * nodes:] - vhat_T, M)
+misfit_norm_u = cost_fidel_vals_u[-1]
+misfit_norm_v = cost_fidel_vals_v[-1]
 control_as_td_vector = true_control * np.ones(vec_length)
 true_control_norm = hp.L2_norm_sq_Q(control_as_td_vector, num_steps, dt, M)
 
@@ -324,12 +325,12 @@ print(f"Final cost functional value for Ω × [0,{T}]:", cost_fun_new)
 print(f"β/2 *||c_true|| in L^2-norm^2 over Ω × [0,{T_data}]:", beta/2*true_control_norm)
 print("Control mean at t=T:", np.mean(ck[num_steps*nodes:]))
 
-import matplotlib.pyplot as plt
-mean_ck = []
-for i in range(num_steps):
-    start = i * nodes
-    end = (i+1) * nodes
-    mean_ck.append(np.mean(ck[start:end]))
-plt.plot(mean_ck)
-plt.title("Mean of the control over domain at each time step")
-plt.show()
+# import matplotlib.pyplot as plt
+# mean_ck = []
+# for i in range(num_steps):
+#     start = i * nodes
+#     end = (i+1) * nodes
+#     mean_ck.append(np.mean(ck[start:end]))
+# plt.plot(mean_ck)
+# plt.title("Mean of the control over domain at each time step")
+# plt.show()
