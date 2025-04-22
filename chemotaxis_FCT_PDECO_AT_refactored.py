@@ -24,7 +24,7 @@ J(u,v,c) = 1/2*||u - û||² + 1/2*||v - v̂||² + β/2*||c||²
 min_{u,v,c} J(u,v,c)
 subject to:  
   du/dt + ∇⋅(-Dm*∇u + X*u*exp(-ηu)*∇v) = 0      in Ω × [0,T]
-              dv/dt + ∇⋅(-Dv*∇v) + δ*v = c*(u/r)    in Ω × [0,T]
+              dv/dt + ∇⋅(-Df*∇v) + δ*v = c*(u/r)    in Ω × [0,T]
           (-Dm*∇u + X*u*exp(-ηu)*∇v)⋅n = 0      on ∂Ω × [0,T]
                                  ∇v⋅n = 0       on ∂Ω × [0,T]
                                  u(0) = u0(x)    in Ω
@@ -42,28 +42,6 @@ Additional optimality conditions:
 - Gradient equation:  β*c - q*u = 0   in Ωx[0,T]
 """
 
-# import sys
-
-# # Save original stdout and stderr
-# original_stdout = sys.stdout
-# original_stderr = sys.stderr
-
-# # Open a file to write output
-# with open("output_log.txt", "w") as f:
-#     sys.stdout = f
-#     sys.stderr = f
-    
-#     try:
-#         # Your script code goes here
-#         print("This will be saved to output_log.txt")
-#         # simulate an error
-#         raise ValueError("An example error.")
-#     finally:
-#         # Restore original stdout and stderr
-#         sys.stdout = original_stdout
-#         sys.stderr = original_stderr
-
-
 # ---------------------------- General Parameters ----------------------------
 a1, a2 = 0, 1
 dx = 0.025 # Element size
@@ -71,7 +49,6 @@ intervals = round((a2-a1)/dx)
 
 dt = 0.001
 T = round(100*dt,2)
-T_data = round(100*dt,2)
 num_steps = round(T / dt)
 
 produce_plots = True # Toggle for visualization
@@ -79,14 +56,14 @@ optim = "alltime"
 
 # ---------------------------- PDECO parameters ------------------------------
 
-beta = 1e-4 # Regularization parameter
+beta = 1e-3 # Regularization parameter
 
 # Box constraints for c
-c_lower = 0#-1
-c_upper = 20#1
+c_lower = 0
+c_upper = 20 
 
 delta, Dm, Df, chi, true_control, eta = hp.get_chtxs_sys_params()
-rescaling = 1/10
+rescaling = 1/10 # also need to adjust in the solvers for state and adjoint equations
 true_control = true_control*rescaling
 
 # --------------------- Gradient descent parameters --------------------------
@@ -100,16 +77,16 @@ armijo_s0 = 2
 # ----------------------- Input & Output file paths --------------------------
 
 target_data_path = f"Chtxs_data_T100_dx{dx}_dt{dt}"
-target_file_u = os.path.join(target_data_path, "chtxs_m_t0.5.csv") # "chtxs_m_t100.csv")#
-target_file_v = os.path.join(target_data_path, "chtxs_f_t0.5.csv") #"chtxs_f_t100.csv")#
-# target_file_u = os.path.join(target_data_path, "chtxs_m_t100.csv")
+target_file_u = os.path.join(target_data_path, "chtxs_m_t0.5.csv")
+target_file_v = os.path.join(target_data_path, "chtxs_f_t0.5.csv")
+# target_file_u = os.path.join(target_data_path, "chtxs_m_t100.csv") # Use when dt=0.1
 # target_file_v = os.path.join(target_data_path, "chtxs_f_t100.csv")
 
-out_folder = f"ref_Chtx_AT_T{T}_Tdata{T_data}_dt{dt}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}_E5_rescaled_prec"
+out_folder = f"Chtx_AT_T{T}_dt{dt}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}"
 if not Path(out_folder).exists():
     Path(out_folder).mkdir(parents=True)
    
-print(f"dx={dx}, {dt=}, {T=}, {T_data=}, {beta=}, {c_lower=}, {c_upper=}")
+print(f"dx={dx}, {dt=}, {T=}, {beta=}, {c_lower=}, {c_upper=}")
 print(f"{Dm=}, {Df=}, {delta=}, {chi=}, {eta=}")
 print(f"{tol=}, {max_iter_GD=}, {max_iter_armijo=}, {armijo_gamma=}, {armijo_s0=}")
 
@@ -133,7 +110,7 @@ dof_neighbors = hp.find_node_neighbours(mesh, nodes, vertex_to_dof)
 
 u0, v0 = hp.chtxs_sys_IC(a1, a2, dx, nodes, vertex_to_dof)
 
-## choose target states as true solutions
+# Choose target states as true solutions
 uhat_re, uhat = hp.import_data_final(target_file_u, nodes, vertex_to_dof,
                                           num_steps=num_steps, time_dep=True)
 vhat_re, vhat = hp.import_data_final(target_file_v, nodes, vertex_to_dof,
@@ -142,9 +119,6 @@ vhat_re, vhat = hp.import_data_final(target_file_v, nodes, vertex_to_dof,
 # ----------------- Initialize gradient descent variables --------------------
 
 vec_length = (num_steps + 1) * nodes # Include zero and final time
-
-# uhat = np.ones(vec_length)
-# vhat = 2*np.ones(vec_length)
 
 # Initial guess for the control
 ck = np.zeros(vec_length)
@@ -192,12 +166,13 @@ while (stop_crit >= tol or fail_pass or it < 2) and it < max_iter_GD:
     print(f"\n{it=}")
     
     ## 1. choose the descent direction 
-    # dk = -(beta*ck - qk*uk/rescaling)
+    dk = -(beta*ck - qk*uk/rescaling)
 
-    ### Preconditioner approach
-    #1. Preconditioner M = diag(max |uk * qk / rescaling|)
-    Prec_dk = diags(np.max(np.abs(uk * qk/rescaling)) * np.ones_like(qk), offsets=0, format="csc")
-    dk = spsolve(Prec_dk, -(beta*ck - qk*uk/rescaling))
+    ### Alternative: Preconditioner approach
+    # Preconditioner: diag(max |uk * qk / rescaling|)
+    # Prec_dk = diags(np.max(np.abs(uk*qk/rescaling)) * np.ones_like(qk), offsets=0, format="csc")
+    # dk = spsolve(Prec_dk, -(beta*ck - qk*uk/rescaling))
+    # print("Using preconditioned dk")
     
     ## 2. Find optimal stepsize with Armijo line search and calculate uk, ck
     print("Starting Armijo line search...")
@@ -266,7 +241,7 @@ while (stop_crit >= tol or fail_pass or it < 2) and it < max_iter_GD:
 
     if produce_plots is True:
         hp.plot_two_var_solution(
-            uk, vk, pk, qk, ck, uhat_re, vhat_re, T_data, it, nodes, 
+            uk, vk, pk, qk, ck, uhat_re, vhat_re, T, it, nodes, 
             num_steps, dt, out_folder, vertex_to_dof, optim, step_freq=2)
 
     hp.plot_progress(
@@ -307,20 +282,23 @@ qk.tofile(out_folder + "/Chtxs_q.csv", sep = ",")
 
 # Prepare the data to be written to the CSV
 data = {"timestamp" : datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-    "Sim. duration" : round(simulation_duration, 2), "T" : T, "T_data" : T_data, 
+    "Sim. duration" : round(simulation_duration, 2), "T" : T, 
     "beta" : beta, "tol" : tol, "GD its" : it, "Armijo its" : armijo_its, 
     "C_ad" : f"[{c_lower}, {c_upper}]", "Mean c. in L^2(Q)^2" : eval_sim, 
     "Misfit norm u" : misfit_norm_u, "Misfit norm v" : misfit_norm_v,
-    "J(c_true)" : beta/2*true_control_norm, "out_folder_name" : out_folder}
+    "J(c_true)" : beta/2*true_control_norm, "J_final_it" : cost_fun_new,
+    "J_diff" : beta/2*true_control_norm - cost_fun_new, 
+    "out_folder_name" : out_folder}
 
-csv_file_path = "Chtx_FT_simulation_results.csv"
+csv_file_path = "Chtx_AT_simulation_results.csv"
 file_exists = os.path.isfile(csv_file_path)
 
 # Write the data to the CSV file
 with open(csv_file_path, mode="a", newline="") as csv_file:
-    fieldnames = ["timestamp", "Sim. duration", "T", "T_data", "beta", "tol", 
+    fieldnames = ["timestamp", "Sim. duration", "T", "beta", "tol", 
                   "GD its",  "Armijo its", "C_ad", "Mean c. in L^2(Q)^2",  
-                  "Misfit norm u", "Misfit norm v", "J(c_true)", "out_folder_name"]
+                  "Misfit norm u", "Misfit norm v", "J(c_true)", "J_final_it",
+                  "J_diff", "out_folder_name"]
     writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
 
     # Write the header only if the file does not exist
@@ -332,9 +310,8 @@ with open(csv_file_path, mode="a", newline="") as csv_file:
 print(f"\nExit:\nFinal stopping criterion: {stop_crit} \nIterations: {it}")
 print("Armijo iterations:", armijo_its)
 print("Solutions saved to:", out_folder)
-print("||u(T) - û_T|| in L^2(Ω)^2 :", misfit_norm_u)
-print("||v(T) - v̂_T|| in L^2(Ω)^2 :", misfit_norm_v)
+print("||u - û|| in L^2(Q)^2 :", misfit_norm_u)
+print("||v - v̂|| in L^2(Q)^2 :", misfit_norm_v)
 print("Average control in L^2(Q)^2:", eval_sim)
 print(f"Final cost functional value for Ω × [0,{T}]:", cost_fun_new)
-print(f"β/2 *||c_true|| in L^2-norm^2 over Ω × [0,{T_data}]:", beta/2*true_control_norm)
-print("Control mean at t=T:", np.mean(ck[num_steps*nodes:]))
+print(f"β/2 *||c_true|| in L^2-norm^2 over Ω × [0,{T}]:", beta/2*true_control_norm)

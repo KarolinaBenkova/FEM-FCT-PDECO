@@ -12,7 +12,7 @@ import helpers as hp
 # -----------------------------------------------------------------=----------
 
 """
-Solves the PDECO problem below with projected gradient descent method and FCT
+Solves the PDECO problem below with projected gradient descent method and FCT.
 Cost functional:
 J(u,v,c) = 1/2*||u(T) - û_T||² + 1/2*||v(T) - v̂_T||² + β/2*||c||²
 (misfit: L²-norms over Ω,  regularization: L²-norm over Ω × [0,T])
@@ -91,7 +91,7 @@ print(f"{tol=}, {max_iter_GD=}, {max_iter_armijo=}")
 
 mesh = df.RectangleMesh(df.Point(a1, a1), df.Point(a2, a2), intervals, intervals)
 V = df.FunctionSpace(mesh, "CG", 1)
-W = df.VectorFunctionSpace(mesh, "CG", 1)
+# W = df.VectorFunctionSpace(mesh, "CG", 1)
 nodes = V.dim()
 sqnodes = round(np.sqrt(nodes))
 vertex_to_dof = df.vertex_to_dof_map(V)
@@ -136,7 +136,7 @@ uk, vk = hp.solve_schnak_system(
 pk = np.zeros(vec_length)
 qk = np.zeros(vec_length)
 pk, qk = hp.solve_adjoint_schnak_system(uk, vk, uhat_T, vhat_T, pk, qk, T, V, 
-                                        W, nodes, num_steps, dt, dof_neighbors)
+                                        nodes, num_steps, dt, dof_neighbors)
 
 # Calculate initial cost functional
 cost_fun_old = hp.cost_functional(uk, uhat_T, ck, num_steps, dt, M, beta, 
@@ -175,7 +175,7 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
       
     ## 3. Solve the adjoint equation using new uk and vk
     pk, qk = hp.solve_adjoint_schnak_system(uk, vk, uhat_T, vhat_T, pk, qk, T, 
-                                  V, W, nodes, num_steps, dt, dof_neighbors)        
+                                  V, nodes, num_steps, dt, dof_neighbors)        
     
     if iters == max_iter_armijo:
         fail_count += 1

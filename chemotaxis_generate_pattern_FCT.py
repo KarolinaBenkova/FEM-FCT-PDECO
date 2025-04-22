@@ -34,11 +34,11 @@ Parameters considered:
 
 
 a1, a2 = 0, 1
-dx = 0.025 # 0.005 # Element size
+dx = 0.025 #0.025 # 0.005 # Element size
 intervals = round((a2 - a1) / dx)
 
 dt = 0.1
-T = 3*dt
+T = round(500*dt,2)
 num_steps = round(T / dt)
 
 show_plots = True # Toggle for visualization
@@ -50,7 +50,7 @@ constant_gamma = df.Constant(c_gamma)
 
 # ---------------------------- Output File Path ------------------------------
 
-output_dir = Path(f"Chtxs_data_T100_dx{dx}")
+output_dir = Path(f"Chtxs_data_T100_dx{dx}_dt{dt}")
 output_dir.mkdir(parents=True, exist_ok=True)
 output_filename_m = output_dir / f"chtxs_m_t{T}.csv"
 output_filename_f = output_dir / f"chtxs_f_t{T}.csv"
@@ -90,7 +90,7 @@ fvec[:nodes] = f0
 mvec, fvec = hp.solve_chtxs_system(
     z, mvec, fvec, V, nodes, num_steps, dt, dof_neighbors,
     control_fun=constant_gamma, show_plots=show_plots, vertex_to_dof=vertex_to_dof,
-    generation_mode=False, output_dir=output_dir)
+    generation_mode=False, output_dir=output_dir, rescaling=1)
 
 mvec.tofile(output_filename_m, sep=",")
 fvec.tofile(output_filename_f, sep=",")

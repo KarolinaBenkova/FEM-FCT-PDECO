@@ -4,4 +4,14 @@ __pycache__/
 solidbody_pdeco/
 *.csv
 ref_*/
+Schnak_adv*/
+advection_*/
+chtx_*/
+NL_*/
+FCT_*/
+Feb*/
+adv*/
+nonlinear*/
+*_eddie/
+exact_sol_FCT_PGD/
 
