@@ -60,7 +60,7 @@ def reorder_vector_from_dof(vec_dof, num_steps, nodes, vertex_to_dof):
     """
     vec = np.zeros(vec_dof.shape)
     for n in range(num_steps):
-        temp = vec[n*nodes:(n+1)*nodes]
+        temp = vec_dof[n*nodes:(n+1)*nodes]
         for i in range(nodes):
             j = int(vertex_to_dof[i])
             vec[n*nodes + i] = temp[j] 
