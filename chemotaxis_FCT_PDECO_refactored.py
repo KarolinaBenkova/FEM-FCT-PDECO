@@ -44,9 +44,9 @@ a1, a2 = 0, 1
 dx = 0.025 # Element size
 intervals = round((a2-a1)/dx)
 
-dt = 0.1
-T = 10
-T_data = 20.0
+dt = 0.001/2
+T = 200*dt
+T_data = T
 num_steps = round(T / dt)
 
 produce_plots = True # Toggle for visualization
@@ -57,11 +57,11 @@ optim = "finaltime"
 beta = 1e-4 # Regularization parameter
 
 # Box constraints for c
-c_lower = 0#-1
-c_upper = 100#1
+c_lower = 0
+c_upper = 20
 
 delta, Dm, Df, chi, true_control, eta = hp.get_chtxs_sys_params()
-rescaling = 1/10
+rescaling = 1/10 # also need to adjust in the solvers for state and adjoint equations
 true_control = true_control*rescaling
 
 # --------------------- Gradient descent parameters --------------------------
@@ -78,16 +78,19 @@ armijo_s0 = 2
 target_data_path = f"Chtxs_data_T100_dx{dx}_dt{dt}"#"Chtxs_data_T100_coarse"
 target_data_file_name_u = f"chtxs_m"
 target_data_file_name_v = f"chtxs_f"
-target_file_u = os.path.join(target_data_path, f"{target_data_file_name_u}_t{T_data}.csv")
-target_file_v = os.path.join(target_data_path, f"{target_data_file_name_v}_t{T_data}.csv")
+# target_file_u = os.path.join(target_data_path, f"{target_data_file_name_u}_t{T_data}.csv")
+# target_file_v = os.path.join(target_data_path, f"{target_data_file_name_v}_t{T_data}.csv")
+target_file_u = os.path.join(target_data_path, f"{target_data_file_name_u}_t0.5.csv")
+target_file_v = os.path.join(target_data_path, f"{target_data_file_name_v}_t0.5.csv")
 
-out_folder = f"ref_Chtx_FT_T{T}_Tdata{T_data}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}_statesguess_interpol"
+out_folder = f"Chtx_FT_T{T}_Tdata{T_data}_dt{dt}_beta{beta}_Ca{c_lower}_Cb{c_upper}_tol{tol}"
 if not Path(out_folder).exists():
     Path(out_folder).mkdir(parents=True)
    
 print(f"dx={dx}, {dt=}, {T=}, {T_data=}, {beta=}, {c_lower=}, {c_upper=}")
 print(f"{Dm=}, {Df=}, {delta=}, {chi=}, {eta=}")
 print(f"{tol=}, {max_iter_GD=}, {max_iter_armijo=}, {armijo_gamma=}, {armijo_s0=}")
+print(f"{rescaling=}")
 
 # ------------------------------ Initialization ------------------------------
 
@@ -110,8 +113,10 @@ dof_neighbors = hp.find_node_neighbours(mesh, nodes, vertex_to_dof)
 u0, v0 = hp.chtxs_sys_IC(a1, a2, dx, nodes, vertex_to_dof)
 
 ## choose target states as true solutions
-uhat_T_re, uhat_T = hp.import_data_final(target_file_u, nodes, vertex_to_dof)
-vhat_T_re, vhat_T = hp.import_data_final(target_file_v, nodes, vertex_to_dof)
+uhat_T_re, uhat_T = hp.import_data_final(target_file_u, nodes, vertex_to_dof,
+                                         num_steps=num_steps)
+vhat_T_re, vhat_T = hp.import_data_final(target_file_v, nodes, vertex_to_dof,
+                                         num_steps=num_steps)
 
 # ## Target states interpolation for initialization of uk, vk:
 # sqnodes = round(np.sqrt(nodes))
@@ -174,7 +179,7 @@ start_time = time.time()
 # ------------------------ PROJECTED GRADIENT DESCENT ------------------------
 ##############################################################################
 
-while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
+while (stop_crit >= tol or fail_pass or it < 2) and it < max_iter_GD:
     print(f"\n{it=}")
     
     ## 1. choose the descent direction 
@@ -184,7 +189,8 @@ while (stop_crit >= tol or fail_pass) and it < max_iter_GD:
     # #1. Preconditioner M = diag(max |uk * qk / rescaling|)
     # Prec_dk = diags(np.max(np.abs(uk * qk/rescaling)) * np.ones_like(qk), offsets=0, format="csc")
     # dk = spsolve(Prec_dk, -(beta*ck - qk*uk/rescaling))
-    
+    # print("Using preconditioned dk")
+
     ## 2. Find optimal stepsize with Armijo line search and calculate uk, ck
     print("Starting Armijo line search...")
     uk, vk, ck, iters = hp.armijo_line_search_ref(uk, ck, dk, uhat_T, num_steps, dt, 
@@ -324,13 +330,3 @@ print("Average control in L^2(Q)^2:", eval_sim)
 print(f"Final cost functional value for Ω × [0,{T}]:", cost_fun_new)
 print(f"β/2 *||c_true|| in L^2-norm^2 over Ω × [0,{T_data}]:", beta/2*true_control_norm)
 print("Control mean at t=T:", np.mean(ck[num_steps*nodes:]))
-
-# import matplotlib.pyplot as plt
-# mean_ck = []
-# for i in range(num_steps):
-#     start = i * nodes
-#     end = (i+1) * nodes
-#     mean_ck.append(np.mean(ck[start:end]))
-# plt.plot(mean_ck)
-# plt.title("Mean of the control over domain at each time step")
-# plt.show()

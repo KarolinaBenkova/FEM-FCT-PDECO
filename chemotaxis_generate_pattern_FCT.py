@@ -37,8 +37,8 @@ a1, a2 = 0, 1
 dx = 0.025 #0.025 # 0.005 # Element size
 intervals = round((a2 - a1) / dx)
 
-dt = 0.1
-T = round(500*dt,2)
+dt = 0.0005 
+T = round(1000*dt,2)
 num_steps = round(T / dt)
 
 show_plots = True # Toggle for visualization

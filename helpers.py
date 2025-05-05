@@ -1901,9 +1901,11 @@ def import_data_final(file_path, nodes, vertex_to_dof, num_steps=0,
     if time_dep: # for use with all-time optimization
         # Subset the data
         data = data[:(num_steps + 1) * nodes]
-    data_re = reorder_vector_from_dof(data, num_steps + 1, nodes, vertex_to_dof)
+        data_re = reorder_vector_from_dof(data, num_steps + 1, nodes, vertex_to_dof)
 
     if not time_dep: # only loads one frame for final-time target state
+        data = data[num_steps * nodes : (num_steps + 1) * nodes]
+        data_re = reorder_vector_from_dof(data, 1, nodes, vertex_to_dof)
         data_re = data_re.reshape((sqnodes,sqnodes))
         
     return data_re, data

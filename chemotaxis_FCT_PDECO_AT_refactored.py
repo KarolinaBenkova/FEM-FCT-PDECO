@@ -47,8 +47,8 @@ a1, a2 = 0, 1
 dx = 0.025 # Element size
 intervals = round((a2-a1)/dx)
 
-dt = 0.001
-T = round(100*dt,2)
+dt = 0.001/2
+T = round(200*dt,2)
 num_steps = round(T / dt)
 
 produce_plots = True # Toggle for visualization
@@ -70,7 +70,7 @@ true_control = true_control*rescaling
 
 tol = 1e-4
 max_iter_armijo = 20
-max_iter_GD = 100
+max_iter_GD = 50
 armijo_gamma = 1e-5
 armijo_s0 = 2
 
@@ -89,6 +89,7 @@ if not Path(out_folder).exists():
 print(f"dx={dx}, {dt=}, {T=}, {beta=}, {c_lower=}, {c_upper=}")
 print(f"{Dm=}, {Df=}, {delta=}, {chi=}, {eta=}")
 print(f"{tol=}, {max_iter_GD=}, {max_iter_armijo=}, {armijo_gamma=}, {armijo_s0=}")
+print(f"{rescaling=}")
 
 # ------------------------------ Initialization ------------------------------
 

@@ -6,7 +6,6 @@ solidbody_pdeco/
 ref_*/
 Schnak_adv*/
 advection_*/
-chtx_*/
 NL_*/
 FCT_*/
 Feb*/
@@ -14,4 +13,8 @@ adv*/
 nonlinear*/
 *_eddie/
 exact_sol_FCT_PGD/
+chtxs.o*
+*.png
+NL_b0.1_T0.5_Td2_C3*
+*.zip
 
