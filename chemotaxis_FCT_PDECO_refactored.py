@@ -75,7 +75,8 @@ armijo_s0 = 2
 # ----------------------- Input & Output file paths --------------------------
 
 # target_data_path = "chtx_chi0.25_simplfeathers_dx0.005_Jan"
-target_data_path = f"Chtxs_data_T100_dx{dx}_dt{dt}"#"Chtxs_data_T100_coarse"
+# target_data_path = f"Chtxs_data_T100_dx{dx}_dt{dt}"#"Chtxs_data_T100_coarse"
+target_data_path = f"Chtxs_data_dx{dx}_dt{dt}"#"Chtxs_data_T100_coarse"
 target_data_file_name_u = f"chtxs_m"
 target_data_file_name_v = f"chtxs_f"
 # target_file_u = os.path.join(target_data_path, f"{target_data_file_name_u}_t{T_data}.csv")
